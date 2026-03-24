@@ -46,3 +46,4 @@ D:\FAIZ\projexxts\ebay-hunter\backend\obj\Debug\net8.0\refint\EbayHunter.API.dll
 D:\FAIZ\projexxts\ebay-hunter\backend\obj\Debug\net8.0\EbayHunter.API.pdb
 D:\FAIZ\projexxts\ebay-hunter\backend\obj\Debug\net8.0\EbayHunter.API.genruntimeconfig.cache
 D:\FAIZ\projexxts\ebay-hunter\backend\obj\Debug\net8.0\ref\EbayHunter.API.dll
+D:\FAIZ\projexxts\ebay-hunter\backend\obj\Debug\net8.0\EbayHunter.API.sourcelink.json

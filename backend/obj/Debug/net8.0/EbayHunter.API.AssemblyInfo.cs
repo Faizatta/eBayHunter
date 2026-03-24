@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("EbayHunter.API")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+52e3817489ec810b13e442b500ffebdb6af57118")]
 [assembly: System.Reflection.AssemblyProductAttribute("EbayHunter.API")]
 [assembly: System.Reflection.AssemblyTitleAttribute("EbayHunter.API")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

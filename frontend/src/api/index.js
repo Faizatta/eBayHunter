@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: 'https://paradoxal-amusedly-tristan.ngrok-free.dev/api',
   timeout: 60000,  // 60s – bot can take a while
   headers: {
     'ngrok-skip-browser-warning': 'true'
