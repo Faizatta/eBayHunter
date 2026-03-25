@@ -24,7 +24,16 @@
         <form @submit.prevent="handleLogin" class="space-y-5">
           <div>
             <label class="block text-sm font-display text-zinc-400 mb-1.5">Email address</label>
-            <input v-model="form.email" type="email" class="input" placeholder="you@example.com" required autocomplete="email" />
+            <input
+              v-model="form.email"
+              type="email"
+              class="input"
+              :class="{ 'border-red-500 focus:ring-red-500': fieldError === 'email' }"
+              placeholder="you@example.com"
+              required
+              autocomplete="email"
+              @input="clearError"
+            />
           </div>
 
           <div>
@@ -34,9 +43,11 @@
                 v-model="form.password"
                 :type="showPassword ? 'text' : 'password'"
                 class="input pr-11"
+                :class="{ 'border-red-500 focus:ring-red-500': fieldError === 'password' }"
                 placeholder="••••••••"
                 required
                 autocomplete="current-password"
+                @input="clearError"
               />
               <button type="button" @click="showPassword = !showPassword"
                 class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors">
@@ -51,13 +62,32 @@
             </div>
           </div>
 
-          <!-- Error -->
-          <div v-if="error" class="flex items-center gap-2 text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-xl px-4 py-3">
-            <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
-            {{ error }}
-          </div>
+          <!-- Error Banner -->
+          <Transition name="error-slide">
+            <div
+              v-if="error"
+              class="flex items-start gap-3 text-sm rounded-xl px-4 py-3 border"
+              :class="errorClass"
+            >
+              <!-- Icon: network -->
+              <svg v-if="errorType === 'network'" class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636a9 9 0 010 12.728M15.536 8.464a5 5 0 010 7.072M6.343 6.343a9 9 0 000 12.728M9.172 9.172a5 5 0 000 7.071M12 12h.01"/>
+              </svg>
+              <!-- Icon: server -->
+              <svg v-else-if="errorType === 'server'" class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/>
+              </svg>
+              <!-- Icon: auth / default -->
+              <svg v-else class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              </svg>
+
+              <div>
+                <p class="font-medium leading-snug">{{ error }}</p>
+                <p v-if="errorHint" class="mt-1 opacity-75">{{ errorHint }}</p>
+              </div>
+            </div>
+          </Transition>
 
           <button type="submit" class="btn-primary w-full justify-center" :disabled="loading">
             <div v-if="loading" class="spinner w-4 h-4" />
@@ -77,31 +107,107 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import api from '@/api' // ✅ use shared axios instance — single URL, JWT interceptor included
+import api from '@/api'
 
 const router = useRouter()
 
-const form = ref({ email: '', password: '' })
-const loading = ref(false)
-const error = ref('')
+const form         = ref({ email: '', password: '' })
+const loading      = ref(false)
+const error        = ref('')
+const errorHint    = ref('')
+const errorType    = ref('')      // 'auth' | 'network' | 'server' | 'unknown'
+const errorClass   = ref('')
+const fieldError   = ref('')      // 'email' | 'password' — highlights the offending input
 const showPassword = ref(false)
+
+function clearError() {
+  error.value      = ''
+  errorHint.value  = ''
+  errorType.value  = ''
+  fieldError.value = ''
+  errorClass.value = ''
+}
+
+function setError(type, message, hint = '', field = '') {
+  errorType.value  = type
+  error.value      = message
+  errorHint.value  = hint
+  fieldError.value = field
+  errorClass.value = type === 'network' || type === 'server'
+    ? 'text-amber-400 bg-amber-400/10 border-amber-400/20'
+    : 'text-red-400 bg-red-400/10 border-red-400/20'
+}
 
 async function handleLogin() {
   loading.value = true
-  error.value = ''
+  clearError()
 
   try {
     const response = await api.post('/api/login', {
-      email: form.value.email,
+      email:    form.value.email,
       password: form.value.password,
     })
 
     localStorage.setItem('token', response.data.token)
     router.push('/dashboard')
+
   } catch (e) {
-    error.value = e.response?.data?.error ?? 'Login failed. Please try again.'
+    const status    = e.response?.status
+    const serverMsg = e.response?.data?.error || e.response?.data?.message || ''
+
+    if (!e.response) {
+      // No response = CORS block or network is down
+      setError(
+        'network',
+        'Cannot reach the server.',
+        'Check your internet connection or try again in a moment.'
+      )
+    } else if (status === 401) {
+      setError(
+        'auth',
+        'Incorrect email or password.',
+        'Double-check your credentials and try again.',
+        'password'
+      )
+    } else if (status === 404) {
+      setError(
+        'auth',
+        'No account found with that email.',
+        'Check the address or sign up for a free account.',
+        'email'
+      )
+    } else if (status === 429) {
+      setError(
+        'auth',
+        'Too many login attempts.',
+        'Please wait a few minutes before trying again.'
+      )
+    } else if (status >= 500) {
+      setError(
+        'server',
+        'Server error — something went wrong on our end.',
+        serverMsg || 'Please try again in a moment.'
+      )
+    } else {
+      setError(
+        'unknown',
+        serverMsg || 'Login failed. Please try again.'
+      )
+    }
   } finally {
     loading.value = false
   }
 }
 </script>
+
+<style scoped>
+.error-slide-enter-active,
+.error-slide-leave-active {
+  transition: all 0.2s ease;
+}
+.error-slide-enter-from,
+.error-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+</style>
