@@ -1,9 +1,11 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'https://ebayhunter-production.up.railway.app',
+  baseURL: 'https://ebayhunter-production.up.railway.app',
   timeout: 60000,
+  withCredentials: true,
 })
+
 
 // Attach JWT token to every request
 api.interceptors.request.use(config => {
