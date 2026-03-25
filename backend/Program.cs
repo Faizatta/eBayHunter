@@ -40,7 +40,7 @@ builder.Services.AddAuthorization();
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
-    ?? new[] { "http://localhost:5173" };
+    ?? new[] { "https://e-bay-hunter-us4u.vercel.app/login" };
 
 var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL")
                        ?? builder.Configuration.GetConnectionString("DefaultConnection");
