@@ -85,27 +85,39 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '../stores/auth'
+import axios from 'axios'
 
 const router = useRouter()
-const auth   = useAuthStore()
 
-const form         = ref({ email: '', password: '' })
-const loading      = ref(false)
-const error        = ref('')
+const form = ref({ email: '', password: '' })
+const loading = ref(false)
+const error = ref('')
 const showPassword = ref(false)
 
-const plans = [
-  { name: 'Free',  limit: 5   },
-  { name: 'Basic', limit: 20  },
-  { name: 'Pro',   limit: 100 },
-]
+// Login function
+async function login(email, password) {
+  try {
+    const response = await axios.post(
+      'https://ebay-hunter-backend.up.railway.app/api/login',
+      { email, password },
+      { withCredentials: true } // ✅ important for CORS + cookies/JWT
+    )
 
+    // Save token or user info
+    localStorage.setItem('token', response.data.token)
+    return response.data
+  } catch (err) {
+    throw err
+  }
+}
+
+// Handle login from form
 async function handleLogin() {
   loading.value = true
-  error.value   = ''
+  error.value = ''
+
   try {
-    await auth.login(form.value.email, form.value.password)
+    await login(form.value.email, form.value.password)
     router.push('/dashboard')
   } catch (e) {
     error.value = e.response?.data?.error ?? 'Login failed. Please try again.'
@@ -113,4 +125,5 @@ async function handleLogin() {
     loading.value = false
   }
 }
+
 </script>
