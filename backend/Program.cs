@@ -43,7 +43,7 @@ builder.Services.AddAuthorization();
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
-    ?? new[] { "https://e-bay-hunter-us4u.vercel.app" };
+    ?? new[] { "https://e-bay-hunter-us4u.vercel.app", "http://localhost:3000" };
 
 builder.Services.AddCors(options =>
 {
@@ -102,9 +102,22 @@ using (var scope = app.Services.CreateScope())
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.UseCors("AllowFrontend");
+// ✅ Preflight OPTIONS handler to fix CORS issues
+app.Use(async (context, next) =>
+{
+    if (context.Request.Method == "OPTIONS")
+    {
+        context.Response.StatusCode = 200;
+        await context.Response.CompleteAsync();
+        return;
+    }
+    await next();
+});
+
+app.UseCors("AllowFrontend");   // Must be BEFORE auth
 app.UseAuthentication();
 app.UseAuthorization();
+
 app.MapControllers();
 
 // ── Bind to Railway dynamic port ──────────────────────────────────────────────
