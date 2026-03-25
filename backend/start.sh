@@ -1,3 +1,3 @@
-#!/bin/sh
-# Run the published .NET app
+
+# Run the published app
 dotnet ./publish/EbayHunter.API.dll
