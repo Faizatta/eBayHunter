@@ -39,8 +39,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization();
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
-var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
-    ?? new[] { "http://localhost:5173" };
+var allowedOrigins = new[] {
+    "https://e-bay-hunter-us4u.vercel.app",                              // production
+    "https://e-bay-hunter-v13z-4jadhk5z2-faiz-s-projects-78ceea9c.vercel.app", // preview
+    "http://localhost:3000"
+};
 
 builder.Services.AddCors(opts =>
     opts.AddPolicy("AllowFrontend", policy =>
