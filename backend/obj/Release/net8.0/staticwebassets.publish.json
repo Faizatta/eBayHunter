@@ -1,0 +1,12 @@
+{
+  "Version": 1,
+  "Hash": "f2+by97WkVOcN4MQ6ZcKfrtDgVqrdOXoYbY3upMsQCA=",
+  "Source": "EbayHunter.API",
+  "BasePath": "_content/EbayHunter.API",
+  "Mode": "Default",
+  "ManifestType": "Publish",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": [],
+  "Endpoints": []
+}
