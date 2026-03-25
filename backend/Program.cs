@@ -42,8 +42,10 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization();
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
-var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
-    ?? new[] { "https://e-bay-hunter-us4u.vercel.app", "http://localhost:3000" };
+var allowedOrigins = new[] {
+    "https://e-bay-hunter-us4u.vercel.app", // production frontend
+    "http://localhost:3000"                  // local dev
+};
 
 builder.Services.AddCors(options =>
 {
@@ -102,11 +104,18 @@ using (var scope = app.Services.CreateScope())
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// ✅ Preflight OPTIONS handler to fix CORS issues
+// ✅ CORS must be before Authentication & Authorization
+app.UseCors("AllowFrontend");
+
+// ✅ Preflight OPTIONS handler (simpler, only one)
 app.Use(async (context, next) =>
 {
     if (context.Request.Method == "OPTIONS")
     {
+        context.Response.Headers.Add("Access-Control-Allow-Origin", "https://e-bay-hunter-us4u.vercel.app");
+        context.Response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+        context.Response.Headers.Add("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        context.Response.Headers.Add("Access-Control-Allow-Credentials", "true");
         context.Response.StatusCode = 200;
         await context.Response.CompleteAsync();
         return;
@@ -114,7 +123,6 @@ app.Use(async (context, next) =>
     await next();
 });
 
-app.UseCors("AllowFrontend");   // Must be BEFORE auth
 app.UseAuthentication();
 app.UseAuthorization();
 
