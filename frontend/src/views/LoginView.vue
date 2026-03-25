@@ -70,14 +70,6 @@
           <router-link to="/register" class="text-brand-400 hover:text-brand-300 font-medium transition-colors">Sign up free</router-link>
         </p>
       </div>
-
-      <!-- Plan preview -->
-      <!-- <div class="mt-6 grid grid-cols-3 gap-3 text-center">
-        <div v-for="plan in plans" :key="plan.name" class="card px-3 py-3">
-          <p class="font-display font-bold text-zinc-100 text-sm">{{ plan.name }}</p>
-          <p class="text-xs text-zinc-500 mt-0.5">{{ plan.limit }} searches/day</p>
-        </div>
-      </div> -->
     </div>
   </div>
 </template>
@@ -85,7 +77,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import axios from 'axios'
+import api from '@/api' // ✅ use shared axios instance — single URL, JWT interceptor included
 
 const router = useRouter()
 
@@ -94,30 +86,17 @@ const loading = ref(false)
 const error = ref('')
 const showPassword = ref(false)
 
-async function login(email, password) {
-  try {
-    const response = await axios.post(
-      'https://ebay-hunter-backend.up.railway.app/api/login',
-      { email, password },
-      { withCredentials: true } // ✅ important for CORS + cookies/JWT
-    );
-
-    // Save token or user info
-    localStorage.setItem('token', response.data.token);
-    return response.data;
-  } catch (err) {
-    // Throw the error so handleLogin can catch it
-    throw err;
-  }
-}
-
-// Handle login from form
 async function handleLogin() {
   loading.value = true
   error.value = ''
 
   try {
-    await login(form.value.email, form.value.password)
+    const response = await api.post('/api/login', {
+      email: form.value.email,
+      password: form.value.password,
+    })
+
+    localStorage.setItem('token', response.data.token)
     router.push('/dashboard')
   } catch (e) {
     error.value = e.response?.data?.error ?? 'Login failed. Please try again.'
@@ -125,5 +104,4 @@ async function handleLogin() {
     loading.value = false
   }
 }
-
 </script>
