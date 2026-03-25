@@ -94,20 +94,20 @@ const loading = ref(false)
 const error = ref('')
 const showPassword = ref(false)
 
-// Login function
 async function login(email, password) {
   try {
     const response = await axios.post(
       'https://ebay-hunter-backend.up.railway.app/api/login',
       { email, password },
       { withCredentials: true } // ✅ important for CORS + cookies/JWT
-    )
+    );
 
     // Save token or user info
-    localStorage.setItem('token', response.data.token)
-    return response.data
+    localStorage.setItem('token', response.data.token);
+    return response.data;
   } catch (err) {
-    throw err
+    // Throw the error so handleLogin can catch it
+    throw err;
   }
 }
 
