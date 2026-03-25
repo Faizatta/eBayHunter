@@ -1,11 +1,8 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'https://paradoxal-amusedly-tristan.ngrok-free.dev/api',
+  baseURL: import.meta.env.VITE_API_URL || 'https://ebayhunter-production.up.railway.app',
   timeout: 60000,
-  headers: {
-    'ngrok-skip-browser-warning': 'true'
-  }
 })
 
 // Attach JWT token to every request
