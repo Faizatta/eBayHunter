@@ -9,8 +9,11 @@ using EbayHunter.API.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 // ── Database ──────────────────────────────────────────────────────────────────
+var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL")
+                       ?? builder.Configuration.GetConnectionString("DefaultConnection");
+
 builder.Services.AddDbContext<AppDbContext>(opts =>
-    opts.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+    opts.UseNpgsql(connectionString));
 
 // ── Auth services ─────────────────────────────────────────────────────────────
 builder.Services.AddScoped<AuthService>();
@@ -38,18 +41,31 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
-// ── CORS ──────────────────────────────────────────────────────────────────────
-var allowedOrigins = new[] {
-    "https://e-bay-hunter-us4u.vercel.app",                              // production
-    "https://e-bay-hunter-v13z-4jadhk5z2-faiz-s-projects-78ceea9c.vercel.app", // preview
-    "http://localhost:3000"
-};
+// ── CORS (permanent fix) ──────────────────────────────────────────────────────
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowFrontend", policy =>
+    {
+        policy.SetIsOriginAllowed(origin =>
+        {
+            if (string.IsNullOrEmpty(origin)) return false;
+            var uri = new Uri(origin);
 
-builder.Services.AddCors(opts =>
-    opts.AddPolicy("AllowFrontend", policy =>
-        policy.WithOrigins(allowedOrigins)
-              .AllowAnyHeader()
-              .AllowAnyMethod()));
+            // ✅ Always allow localhost for dev
+            if (uri.Host == "localhost" || uri.Host == "127.0.0.1")
+                return true;
+
+            // ✅ Allow ALL vercel.app subdomains (production + every preview URL)
+            if (uri.Host.EndsWith(".vercel.app"))
+                return true;
+
+            return false;
+        })
+        .AllowAnyHeader()
+        .AllowAnyMethod()
+        .AllowCredentials();
+    });
+});
 
 // ── Controllers + Swagger ─────────────────────────────────────────────────────
 builder.Services.AddControllers();
@@ -79,24 +95,32 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
-// ── Middleware pipeline ───────────────────────────────────────────────────────
-if (app.Environment.IsDevelopment())
+// ── Auto-run migrations ───────────────────────────────────────────────────────
+using (var scope = app.Services.CreateScope())
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    try
+    {
+        db.Database.Migrate();
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine("Migration failed: " + ex.Message);
+    }
 }
 
+// ── Middleware pipeline ───────────────────────────────────────────────────────
+app.UseSwagger();
+app.UseSwaggerUI();
+
+// ✅ CORS before everything else
 app.UseCors("AllowFrontend");
+
 app.UseAuthentication();
 app.UseAuthorization();
+
 app.MapControllers();
 
-// ── Auto-run migrations in dev ────────────────────────────────────────────────
-if (app.Environment.IsDevelopment())
-{
-    using var scope = app.Services.CreateScope();
-    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    // db.Database.Migrate(); // Uncomment after creating migrations
-}
-
-app.Run();
+// ── Bind to Railway dynamic port ──────────────────────────────────────────────
+var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+app.Run($"http://0.0.0.0:{port}");
