@@ -101,14 +101,12 @@
         </h2>
 
         <div class="flex items-center gap-2 flex-wrap">
-          <!-- Country filter -->
           <select v-model="filterCountry"
             class="bg-zinc-800 border border-zinc-700 text-zinc-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-brand-500">
             <option value="">All countries</option>
             <option v-for="c in resultCountries" :key="c" :value="c">{{ flagFor(c) }} {{ c }}</option>
           </select>
 
-          <!-- Competition filter -->
           <select v-model="filterComp"
             class="bg-zinc-800 border border-zinc-700 text-zinc-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-brand-500">
             <option value="">All competition</option>
@@ -117,7 +115,6 @@
             <option value="high">🔴 High</option>
           </select>
 
-          <!-- Sort -->
           <select v-model="sortBy"
             class="bg-zinc-800 border border-zinc-700 text-zinc-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-brand-500">
             <option value="profit">Profit ↓</option>
@@ -127,7 +124,6 @@
             <option value="margin">Margin ↓</option>
           </select>
 
-          <!-- Excel export -->
           <button @click="exportExcel" class="btn-secondary">
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -141,12 +137,10 @@
       <!-- Summary pills -->
       <div class="flex gap-2 flex-wrap mb-4">
         <span class="text-xs px-3 py-1.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400 font-display">
-          Avg profit:
-          <span class="text-emerald-400 font-semibold ml-1">{{ avgProfit }}</span>
+          Avg profit: <span class="text-emerald-400 font-semibold ml-1">{{ avgProfit }}</span>
         </span>
         <span class="text-xs px-3 py-1.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400 font-display">
-          Avg sales/wk:
-          <span class="text-brand-400 font-semibold ml-1">{{ avgSales }}</span>
+          Avg sales/wk: <span class="text-brand-400 font-semibold ml-1">{{ avgSales }}</span>
         </span>
         <span class="text-xs px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-display">
           🟢 Low comp: <span class="font-semibold ml-1">{{ lowCompCount }}</span>
@@ -183,16 +177,13 @@
           <tbody>
             <tr v-for="(p, i) in sortedResults" :key="i">
 
-              <!-- # -->
               <td class="text-zinc-600 text-xs font-mono">{{ i + 1 }}</td>
 
-              <!-- Title + delivery -->
               <td class="max-w-xs">
-                <p class="text-zinc-200 font-medium text-sm line-clamp-2 leading-snug">{{ p.title }}</p>
+                <p class="text-zinc-200 font-medium text-sm line-clamp-2 leading-snug">{{ p.title || '—' }}</p>
                 <p class="text-xs text-zinc-600 mt-0.5">{{ p.deliveryDays }}</p>
               </td>
 
-              <!-- Country -->
               <td>
                 <div class="flex flex-col gap-1">
                   <span class="flex items-center gap-1.5 text-sm text-zinc-400 whitespace-nowrap">
@@ -209,50 +200,41 @@
                 </div>
               </td>
 
-              <!-- eBay lowest price -->
               <td>
                 <div class="flex flex-col">
                   <span class="font-mono text-zinc-200 text-sm whitespace-nowrap">
-                    {{ currencySymbol(p.currency) }}{{ p.ebayLowestPrice.toFixed(2) }}
+                    {{ currencySymbol(p.currency) }}{{ fmt(p.ebayLowestPrice) }}
                   </span>
                   <span class="text-xs text-zinc-600 font-mono">
-                    list: {{ currencySymbol(p.currency) }}{{ p.ebayPrice.toFixed(2) }}
+                    list: {{ currencySymbol(p.currency) }}{{ fmt(p.ebayPrice) }}
                   </span>
                 </div>
               </td>
 
-              <!-- AliExpress price -->
               <td>
                 <span class="font-mono text-zinc-400 text-sm whitespace-nowrap">
-                  {{ currencySymbol(p.currency) }}{{ p.aliexpressPrice.toFixed(2) }}
+                  {{ currencySymbol(p.currency) }}{{ fmt(p.aliexpressPrice) }}
                 </span>
               </td>
 
-              <!-- Profit -->
               <td>
-                <span :class="p.profit >= 0 ? 'profit-positive' : 'profit-negative'"
-                  class="whitespace-nowrap">
-                  {{ p.profit >= 0 ? '+' : '' }}{{ currencySymbol(p.currency) }}{{ p.profit.toFixed(2) }}
+                <span :class="p.profit >= 0 ? 'profit-positive' : 'profit-negative'" class="whitespace-nowrap">
+                  {{ p.profit >= 0 ? '+' : '' }}{{ currencySymbol(p.currency) }}{{ fmt(p.profit) }}
                 </span>
               </td>
 
-              <!-- Margin % -->
               <td>
                 <span class="text-xs font-mono" :class="marginPct(p) >= 20 ? 'text-emerald-400' : 'text-zinc-500'">
                   {{ marginPct(p) }}%
                 </span>
               </td>
 
-              <!-- Sales/wk -->
               <td>
-                <span class="text-emerald-400 font-mono text-sm font-medium">
-                  {{ p.soldPerWeek }}
-                </span>
+                <span class="text-emerald-400 font-mono text-sm font-medium">{{ p.soldPerWeek }}</span>
                 <span class="text-zinc-600 text-xs font-display">/wk</span>
                 <div class="text-xs text-zinc-600 font-mono mt-0.5">{{ p.totalSoldMonth }} / 30d</div>
               </td>
 
-              <!-- Weekly consistency mini bars -->
               <td>
                 <div v-if="p.weeklyConsistency" class="flex items-end gap-1 h-6">
                   <div v-for="(w, wi) in parseWeeks(p.weeklyConsistency)" :key="wi"
@@ -263,34 +245,26 @@
                 <span v-else class="text-zinc-700 text-xs">—</span>
               </td>
 
-              <!-- Competition -->
               <td>
                 <span :class="compBadgeClass(p.competitionLevel)"
                   class="text-xs font-display font-semibold px-2.5 py-1 rounded-full whitespace-nowrap">
                   {{ compIcon(p.competitionLevel) }} {{ p.competitionLevel }}
                 </span>
-                <div class="text-xs text-zinc-600 font-mono mt-1">
-                  {{ p.activeListings }} listings
-                </div>
+                <div class="text-xs text-zinc-600 font-mono mt-1">{{ p.activeListings }} listings</div>
               </td>
 
-              <!-- Ali rating -->
               <td>
                 <span v-if="p.aliRating > 0" class="flex items-center gap-1 text-amber-400 text-sm font-mono font-medium">
-                  ★ {{ p.aliRating.toFixed(1) }}
+                  ★ {{ fmt(p.aliRating, 1) }}
                 </span>
                 <span v-else class="text-zinc-700 text-xs">—</span>
               </td>
 
-              <!-- Ali reviews -->
               <td>
-                <span v-if="p.aliReviews > 0" class="text-zinc-400 text-sm font-mono">
-                  {{ p.aliReviews }}
-                </span>
+                <span v-if="p.aliReviews > 0" class="text-zinc-400 text-sm font-mono">{{ p.aliReviews }}</span>
                 <span v-else class="text-zinc-700 text-xs">—</span>
               </td>
 
-              <!-- Shipping -->
               <td>
                 <span v-if="p.freeShipping"
                   class="flex items-center gap-1 text-emerald-400 text-xs font-display whitespace-nowrap">
@@ -302,14 +276,13 @@
                 <span v-else class="text-zinc-500 text-xs">Paid</span>
               </td>
 
-              <!-- Links — handles both camelCase and PascalCase from API -->
               <td>
                 <div class="flex flex-col gap-1.5">
-                  <a :href="p.ebayUrl || p.EbayUrl || '#'" target="_blank" rel="noopener noreferrer"
+                  <a :href="p.ebayUrl" target="_blank" rel="noopener noreferrer"
                     class="text-xs bg-zinc-800 hover:bg-brand-500/20 hover:text-brand-400 border border-zinc-700 hover:border-brand-500/30 text-zinc-300 px-2.5 py-1 rounded-lg transition-all font-display text-center">
                     eBay ↗
                   </a>
-                  <a :href="p.aliexpressUrl || p.AliexpressUrl || '#'" target="_blank" rel="noopener noreferrer"
+                  <a :href="p.aliexpressUrl" target="_blank" rel="noopener noreferrer"
                     class="text-xs bg-zinc-800 hover:bg-orange-500/20 hover:text-orange-400 border border-zinc-700 hover:border-orange-500/30 text-zinc-300 px-2.5 py-1 rounded-lg transition-all font-display text-center">
                     Ali ↗
                   </a>
@@ -380,17 +353,23 @@ const countries = [
 const countryFlags = Object.fromEntries(countries.map(c => [c.name, c.flag]))
 function flagFor(name) { return countryFlags[name] ?? '🌐' }
 
-// ── Currency symbol helper ─────────────────────────────────────────────────
+// ── fmt: safe toFixed — never crashes on null/undefined ───────────────────
+function fmt(val, decimals = 2) {
+  const n = parseFloat(val)
+  return isNaN(n) ? (0).toFixed(decimals) : n.toFixed(decimals)
+}
+
+// ── Currency symbol ────────────────────────────────────────────────────────
 function currencySymbol(currency) {
   const map = { GBP: '£', EUR: '€', AUD: 'A$', USD: '$' }
-  return map[currency] ?? currency + ' '
+  return map[currency] ?? (currency ? currency + ' ' : '')
 }
 
 // ── Margin % ───────────────────────────────────────────────────────────────
 function marginPct(p) {
-  return p.ebayLowestPrice > 0
-    ? Math.round((p.profit / p.ebayLowestPrice) * 100)
-    : 0
+  const price  = parseFloat(p.ebayLowestPrice) || 0
+  const profit = parseFloat(p.profit) || 0
+  return price > 0 ? Math.round((profit / price) * 100) : 0
 }
 
 // ── Weekly bars ────────────────────────────────────────────────────────────
@@ -416,24 +395,48 @@ function compIcon(level) {
   return { low: '🟢', medium: '🟡', high: '🔴' }[level] ?? '⚪'
 }
 
+// ── Normalise product — handles camelCase AND PascalCase from ASP.NET ─────
+// This is the key fix: all fields are guaranteed safe types before rendering
+function normalise(p) {
+  return {
+    title:             p.title            ?? p.Title            ?? '',
+    country:           p.country          ?? p.Country          ?? '',
+    currency:          p.currency         ?? p.Currency         ?? 'GBP',
+    ebayPrice:         parseFloat(p.ebayPrice        ?? p.EbayPrice)        || 0,
+    ebayLowestPrice:   parseFloat(p.ebayLowestPrice  ?? p.EbayLowestPrice)  || 0,
+    aliexpressPrice:   parseFloat(p.aliexpressPrice  ?? p.AliexpressPrice)  || 0,
+    aliRating:         parseFloat(p.aliRating        ?? p.AliRating)        || 0,
+    aliReviews:        parseInt  (p.aliReviews       ?? p.AliReviews)       || 0,
+    profit:            parseFloat(p.profit           ?? p.Profit)           || 0,
+    soldPerWeek:       parseInt  (p.soldPerWeek      ?? p.SoldPerWeek)      || 0,
+    totalSoldMonth:    parseInt  (p.totalSoldMonth   ?? p.TotalSoldMonth)   || 0,
+    weeklyConsistency: p.weeklyConsistency ?? p.WeeklyConsistency           ?? '',
+    competitionLevel:  p.competitionLevel  ?? p.CompetitionLevel            ?? 'medium',
+    activeListings:    parseInt  (p.activeListings   ?? p.ActiveListings)   || 0,
+    freeShipping:      p.freeShipping      ?? p.FreeShipping                ?? false,
+    localShipping:     p.localShipping     ?? p.LocalShipping               ?? false,
+    deliveryDays:      p.deliveryDays      ?? p.DeliveryDays                ?? '',
+    ebayUrl:           p.ebayUrl           ?? p.EbayUrl                     ?? '#',
+    aliexpressUrl:     p.aliexpressUrl     ?? p.AliexpressUrl               ?? '#',
+  }
+}
+
 // ── Summary stats ──────────────────────────────────────────────────────────
 const avgProfit = computed(() => {
   const r = sortedResults.value
   if (!r.length) return '—'
   const avg = r.reduce((s, p) => s + p.profit, 0) / r.length
-  const sym = currencySymbol(r[0]?.currency ?? 'GBP')
-  return (avg >= 0 ? '+' : '') + sym + avg.toFixed(2)
+  return (avg >= 0 ? '+' : '') + currencySymbol(r[0]?.currency) + avg.toFixed(2)
 })
 const avgSales = computed(() => {
   const r = sortedResults.value
   if (!r.length) return '—'
-  return Math.round(r.reduce((s, p) => s + (p.soldPerWeek ?? 0), 0) / r.length) + '/wk'
+  return Math.round(r.reduce((s, p) => s + p.soldPerWeek, 0) / r.length) + '/wk'
 })
 const lowCompCount  = computed(() => sortedResults.value.filter(p => p.competitionLevel === 'low').length)
 const medCompCount  = computed(() => sortedResults.value.filter(p => p.competitionLevel === 'medium').length)
 const highCompCount = computed(() => sortedResults.value.filter(p => p.competitionLevel === 'high').length)
 
-// ── Unique countries in results ────────────────────────────────────────────
 const resultCountries = computed(() =>
   [...new Set(results.value.map(p => p.country))].sort()
 )
@@ -441,16 +444,13 @@ const resultCountries = computed(() =>
 // ── Filtered + sorted results ──────────────────────────────────────────────
 const sortedResults = computed(() => {
   let r = [...results.value]
-
   if (filterCountry.value) r = r.filter(p => p.country === filterCountry.value)
   if (filterComp.value)    r = r.filter(p => p.competitionLevel === filterComp.value)
-
   if (sortBy.value === 'profit')     r.sort((a, b) => b.profit - a.profit)
   if (sortBy.value === 'price')      r.sort((a, b) => a.ebayLowestPrice - b.ebayLowestPrice)
-  if (sortBy.value === 'sold')       r.sort((a, b) => (b.soldPerWeek ?? 0) - (a.soldPerWeek ?? 0))
-  if (sortBy.value === 'aliReviews') r.sort((a, b) => (b.aliReviews ?? 0) - (a.aliReviews ?? 0))
+  if (sortBy.value === 'sold')       r.sort((a, b) => b.soldPerWeek - a.soldPerWeek)
+  if (sortBy.value === 'aliReviews') r.sort((a, b) => b.aliReviews - a.aliReviews)
   if (sortBy.value === 'margin')     r.sort((a, b) => marginPct(b) - marginPct(a))
-
   return r
 })
 
@@ -482,7 +482,8 @@ async function runSearch() {
   startCountryAnimation()
   try {
     const res = await api.post('/search', { keyword: keyword.value.trim() })
-    results.value     = res.data.products ?? []
+    // normalise() converts every field to a safe type — no more blank page crashes
+    results.value     = (res.data.products ?? []).map(normalise)
     lastKeyword.value = keyword.value
     searched.value    = true
     auth.decrementSearch()
@@ -529,28 +530,28 @@ function exportExcel() {
     p.ebayLowestPrice.toFixed(2),
     p.aliexpressPrice.toFixed(2),
     p.aliRating > 0 ? p.aliRating.toFixed(1) : '',
-    p.aliReviews ?? '',
+    p.aliReviews,
     p.profit.toFixed(2),
     marginPct(p) + '%',
-    p.soldPerWeek ?? '',
-    p.totalSoldMonth ?? '',
-    p.weeklyConsistency ?? '',
-    p.competitionLevel ?? '',
-    p.activeListings ?? '',
+    p.soldPerWeek,
+    p.totalSoldMonth,
+    p.weeklyConsistency,
+    p.competitionLevel,
+    p.activeListings,
     p.freeShipping ? 'Yes' : 'No',
     p.localShipping ? 'Yes' : 'No',
-    p.deliveryDays ?? '',
-    p.ebayUrl || p.EbayUrl || '',
-    p.aliexpressUrl || p.AliexpressUrl || '',
+    p.deliveryDays,
+    p.ebayUrl,
+    p.aliexpressUrl,
   ].map(escape).join(','))
 
   const csv  = [headers.join(','), ...rows].join('\n')
   const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
   const url  = URL.createObjectURL(blob)
   const a    = document.createElement('a')
-  const safe = lastKeyword.value.replace(/[^a-z0-9]/gi, '_').toLowerCase()
+  const safeName = lastKeyword.value.replace(/[^a-z0-9]/gi, '_').toLowerCase()
   a.href     = url
-  a.download = `ebay_results_${safe}_${new Date().toISOString().slice(0, 10)}.csv`
+  a.download = `ebay_results_${safeName}_${new Date().toISOString().slice(0, 10)}.csv`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
