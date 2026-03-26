@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """
-eBay Product Hunting Bot - v5
+eBay Product Hunting Bot - v7
 - Searches eBay across 4 countries: UK, Germany, Italy, Australia
-- Filters: min 4 sold/week on eBay
-- Scrapes AliExpress: rating 4.5-4.9, 30+ reviews, 3-7 day delivery, free shipping
-- Checks lowest eBay price for profit calculation
-- Exports to Excel + Google Sheets
+- Filters: STRICT — 10–50 sales/week (CURRENT MONTH ONLY, no old history)
+- Consistent weekly sales (no single-spike products)
+- Location matching: listing country == shipping country (local delivery only)
+- Scrapes AliExpress: rating 4.5-4.9, 4+ reviews (min), 3-7 day delivery, free shipping
+- Full profit/loss calculation: eBay price, eBay lowest price, AliExpress price, 13% eBay fee
+- Competition analysis: low / medium / high (active listing count)
+- All product fields: title, country, currency, ebayPrice, ebayLowestPrice,
+  aliexpressPrice, aliRating, aliReviews, profit, soldPerWeek, totalSoldMonth,
+  weeklyConsistency, competitionLevel, activeListings, freeShipping, localShipping,
+  deliveryDays, ebayUrl, aliexpressUrl, whyGoodProduct
+- Exports to Excel + Google Sheets + JSON
 
-Usage: python ebay_bot.py "keyword"
+Usage: python ebay_bot_v7.py "keyword"
 Output: JSON array to stdout
 """
 
@@ -19,7 +26,7 @@ import asyncio
 import os
 import traceback
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 try:
@@ -45,28 +52,40 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────
-# Config
+# Config — STRICT CRITERIA (v6)
 # ─────────────────────────────────────────────────────────────────
 
-MIN_SOLD_PER_WEEK    = 4      # eBay: minimum sold in last week
-ALI_MIN_RATING       = 4.5   # AliExpress: minimum rating
-ALI_MAX_RATING       = 4.9   # AliExpress: maximum rating
-ALI_MIN_REVIEWS      = 30    # AliExpress: minimum reviews
-ALI_MIN_DELIVERY     = 3     # AliExpress: min delivery days
-ALI_MAX_DELIVERY     = 7     # AliExpress: max delivery days
-PRODUCTS_PER_COUNTRY = 10    # max products per country
+# ── Sales filters (CURRENT MONTH only) ───────────────────────────
+MIN_SOLD_PER_WEEK    = 10     # eBay: minimum sales/week (current month)
+MAX_SOLD_PER_WEEK    = 50     # eBay: maximum sales/week (avoid oversaturation)
+MIN_WEEKS_CONSISTENT = 2      # Must show consistent sales across at least 2 weeks
+CURRENT_MONTH_DAYS   = 30     # Only analyse sold listings from the last 30 days
+
+# ── AliExpress filters ────────────────────────────────────────────
+ALI_MIN_RATING       = 4.5
+ALI_MAX_RATING       = 4.9
+ALI_MIN_REVIEWS      = 4     # minimum reviews (4+) ← updated v7
+ALI_MIN_DELIVERY     = 3
+ALI_MAX_DELIVERY     = 7
+
+# ── Search config ─────────────────────────────────────────────────
+PRODUCTS_PER_COUNTRY = 10
 ITEMS_PER_PAGE       = 60
 
-# ── 4 countries only (no USA) ─────────────────────────────────────
+# ── Competition thresholds ────────────────────────────────────────
+# Based on number of active BIN listings found for the same keyword
+COMPETITION_LOW      = 50     # fewer than 50 active listings → LOW
+COMPETITION_MEDIUM   = 200    # 50–200 → MEDIUM, above → HIGH
+
+# ── 4 countries — listing country MUST match shipping country ────
 EBAY_COUNTRIES = [
-    {"name": "UK",        "url": "https://www.ebay.co.uk",  "currency": "GBP", "locale": "en-GB"},
-    {"name": "Germany",   "url": "https://www.ebay.de",     "currency": "EUR", "locale": "de-DE"},
-    {"name": "Italy",     "url": "https://www.ebay.it",     "currency": "EUR", "locale": "it-IT"},
-    {"name": "Australia", "url": "https://www.ebay.com.au", "currency": "AUD", "locale": "en-AU"},
+    {"name": "UK",        "url": "https://www.ebay.co.uk",  "currency": "GBP", "locale": "en-GB", "country_code": "GB"},
+    {"name": "Germany",   "url": "https://www.ebay.de",     "currency": "EUR", "locale": "de-DE", "country_code": "DE"},
+    {"name": "Italy",     "url": "https://www.ebay.it",     "currency": "EUR", "locale": "it-IT", "country_code": "IT"},
+    {"name": "Australia", "url": "https://www.ebay.com.au", "currency": "AUD", "locale": "en-AU", "country_code": "AU"},
 ]
 
-# Google Sheets service account key file path
-GOOGLE_SHEETS_KEY_FILE  = "google_service_account.json"
+GOOGLE_SHEETS_KEY_FILE   = "google_service_account.json"
 GOOGLE_SHEETS_SHEET_NAME = "eBay Hunter Results"
 
 USER_AGENTS = [
@@ -94,30 +113,43 @@ JUNK_TITLES = {
     "new listing", "results", "items", "see all", "top rated",
 }
 
+# Brand keywords to avoid (highly saturated / branded products)
+BRANDED_KEYWORDS = [
+    "apple", "samsung", "sony", "nike", "adidas", "lego", "dyson",
+    "iphone", "ipad", "airpods", "playstation", "xbox", "nintendo",
+    "rolex", "gucci", "louis vuitton", "chanel", "prada", "hermes",
+]
+
 DEBUG_FILE  = "ebay_debug.html"
 _debug_done = False
 
 
 # ─────────────────────────────────────────────────────────────────
-# Data model
+# Data model (v6 — extended)
 # ─────────────────────────────────────────────────────────────────
 
 @dataclass
 class ProductResult:
-    title:           str
-    country:         str
-    currency:        str
-    ebayPrice:       float
-    ebayLowestPrice: float   # ✅ lowest eBay price found
-    aliexpressPrice: float
-    aliRating:       float   # ✅ AliExpress rating
-    aliReviews:      int     # ✅ AliExpress reviews
-    profit:          float
-    soldLastWeek:    int
-    freeShipping:    bool
-    deliveryDays:    str
-    ebayUrl:         str
-    aliexpressUrl:   str
+    title:              str
+    country:            str
+    currency:           str
+    ebayPrice:          float
+    ebayLowestPrice:    float
+    aliexpressPrice:    float
+    aliRating:          float
+    aliReviews:         int
+    profit:             float
+    soldPerWeek:        int       # avg per week (current month only)
+    totalSoldMonth:     int       # total sold in last 30 days
+    weeklyConsistency:  str       # e.g. "10 / 12 / 11 / 9" — week-by-week breakdown
+    competitionLevel:   str       # "low" / "medium" / "high"
+    activeListings:     int       # number of competing active BIN listings
+    freeShipping:       bool
+    localShipping:      bool      # shipping country matches listing country
+    deliveryDays:       str
+    ebayUrl:            str
+    aliexpressUrl:      str
+    whyGoodProduct:     str       # human-readable rationale
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -166,6 +198,20 @@ def parse_reviews(text) -> int:
 
 
 def calculate_profit(ebay_price: float, ali_price: float) -> float:
+    """
+    Profit / Loss formula (v7):
+        profit = eBay lowest price - AliExpress price - eBay fee (13%)
+
+    Example:
+        eBay lowest price : £20.00
+        AliExpress price  : £4.00
+        eBay fee (13%)    : £2.60
+        ─────────────────────────
+        Profit            : £13.40  (positive = profitable)
+        Loss example      : if ali = £18.00 → profit = -0.60 (shown as negative)
+
+    Uses the LOWEST eBay price (worst-case scenario) for conservative estimates.
+    """
     ebay_fee = round(ebay_price * 0.13, 2)
     return round(ebay_price - ali_price - ebay_fee, 2)
 
@@ -180,6 +226,54 @@ def is_junk_title(title: str) -> bool:
 
 def is_blocked_page(html: str) -> bool:
     return any(s in html[:8000].lower() for s in BLOCK_SIGNALS)
+
+
+def is_branded(title: str) -> bool:
+    """Returns True if the product title contains well-known brand names."""
+    tl = title.lower()
+    return any(brand in tl for brand in BRANDED_KEYWORDS)
+
+
+def competition_label(active_listings: int) -> str:
+    if active_listings < COMPETITION_LOW:
+        return "low"
+    elif active_listings < COMPETITION_MEDIUM:
+        return "medium"
+    return "high"
+
+
+def build_why_good(product: dict, ali_item: Optional[dict], competition: str,
+                   weekly_sales: int, consistent: bool, profit: float) -> str:
+    """Compose a short human-readable rationale for why this product is a good pick."""
+    reasons = []
+
+    # Sales velocity
+    if MIN_SOLD_PER_WEEK <= weekly_sales <= MAX_SOLD_PER_WEEK:
+        reasons.append(f"Sells ~{weekly_sales}/week (current month) — healthy demand without saturation.")
+
+    # Consistency
+    if consistent:
+        reasons.append("Consistent weekly sales with no single-spike pattern.")
+
+    # Competition
+    if competition == "low":
+        reasons.append("Low competition: fewer sellers = easier to rank and profit.")
+    elif competition == "medium":
+        reasons.append("Medium competition: proven demand but room for new entrants.")
+
+    # Profit margin
+    if profit > 0:
+        margin_pct = round((profit / product["price"]) * 100, 1) if product.get("price") else 0
+        reasons.append(f"Estimated profit: {profit:.2f} {product.get('currency', '')} ({margin_pct}% margin).")
+
+    # AliExpress quality
+    if ali_item and ali_item.get("rating", 0) >= ALI_MIN_RATING:
+        reasons.append(f"Quality supplier: {ali_item['rating']}★ with {ali_item.get('reviews', 0)} reviews.")
+
+    # Local shipping
+    reasons.append("Ships locally — fast delivery boosts buyer trust and conversion.")
+
+    return " ".join(reasons) if reasons else "Meets all v6 criteria: sales, competition, and sourcing filters."
 
 
 def dump_debug(html: str, country: str) -> None:
@@ -278,8 +372,17 @@ def _product_from_dict(d: dict, country: str, currency: str) -> Optional[dict]:
         if free_ship:
             break
 
+    # Try to extract shipping location (country) from listing data
+    ship_country = ""
+    for k in ("itemLocation", "location", "country", "shippingCountry", "locationCountry"):
+        v = d.get(k)
+        if v and isinstance(v, str) and len(v) >= 2:
+            ship_country = v.strip()
+            break
+
     return {"title": title, "url": url, "price": price,
             "soldLastWeek": sold, "freeShipping": free_ship,
+            "shippingCountry": ship_country,
             "country": country, "currency": currency}
 
 
@@ -356,7 +459,7 @@ def extract_from_ldjson(html: str, country: str, currency: str) -> list:
                 continue
             seen.add(url)
             products.append({"title": name, "url": url, "price": price,
-                              "soldLastWeek": 0,
+                              "soldLastWeek": 0, "shippingCountry": "",
                               "freeShipping": "free" in str(offers.get("shippingDetails", "")).lower(),
                               "country": country, "currency": currency})
     return products
@@ -389,6 +492,7 @@ def _parse_html_block(block: str, country: str, currency: str) -> Optional[dict]
     url = url_m.group(1)
     if is_junk_url(url):
         return None
+
     title = None
     for pat in [
         r'class="[^"]*s-item__title[^"]*"[^>]*>\s*(?:<span[^>]*>[^<]*</span>\s*)?([^<]{8,200})',
@@ -402,6 +506,7 @@ def _parse_html_block(block: str, country: str, currency: str) -> Optional[dict]
                 break
     if not title:
         return None
+
     price = 0.0
     for pat in [
         r'class="[^"]*s-item__price[^"]*"[^>]*>(.*?)</span>',
@@ -414,22 +519,31 @@ def _parse_html_block(block: str, country: str, currency: str) -> Optional[dict]
                 break
     if price <= 0:
         return None
+
     sold = 0
     sm = re.search(r"([\d,\.]+\s*[kK]?\s*(?:sold|verkauft|venduto))", block, re.I)
     if sm:
         sold = parse_sold(sm.group(1))
+
     free_ship = bool(re.search(
         r"free\s*(shipping|postage|delivery)|kostenlos|spedizione\s*gratuita|\+\s*\$\s*0\.00",
         block, re.I,
     ))
+
+    # Try to detect location from the item block
+    ship_country = ""
+    loc_m = re.search(
+        r'(?:item\s*location|location|versandort|luogo)[^:]*:\s*([A-Za-z ,]+?)(?:<|,|\|)',
+        block, re.I,
+    )
+    if loc_m:
+        ship_country = loc_m.group(1).strip()
+
     return {"title": title, "url": url, "price": price,
             "soldLastWeek": sold, "freeShipping": free_ship,
+            "shippingCountry": ship_country,
             "country": country, "currency": currency}
 
-
-# ─────────────────────────────────────────────────────────────────
-# Extract products
-# ─────────────────────────────────────────────────────────────────
 
 def extract_products(html: str, country: str, currency: str) -> list:
     p = extract_from_json_blobs(html, country, currency)
@@ -446,28 +560,170 @@ def extract_products(html: str, country: str, currency: str) -> list:
 
 
 # ─────────────────────────────────────────────────────────────────
-# ✅ NEW: Get lowest eBay price for an item
+# ✅ v6 NEW: Sold listings scraper (current month only)
+# ─────────────────────────────────────────────────────────────────
+
+async def get_current_month_sales(page, keyword: str, base_url: str, country_cfg: dict) -> dict:
+    """
+    Fetch SOLD listings from the last 30 days and compute:
+    - Total sold (30 days)
+    - Weekly breakdown (4 weeks)
+    - Avg sold per week
+    - Consistency flag
+    Returns dict with keys: total, per_week_avg, weeks, consistent
+    """
+    try:
+        encoded = keyword.replace(" ", "+")
+        # LH_Sold=1 + LH_Complete=1 = Completed sold listings
+        # _sop=10 = sort by most recently sold
+        url = (
+            f"{base_url}/sch/i.html?_nkw={encoded}"
+            f"&LH_Sold=1&LH_Complete=1&_sop=10&LH_BIN=1&_ipg={ITEMS_PER_PAGE}"
+        )
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(1.5)
+        html = await page.content()
+
+        if is_blocked_page(html):
+            return {"total": 0, "per_week_avg": 0, "weeks": [], "consistent": False}
+
+        # ── Parse sold dates ──────────────────────────────────────
+        now     = datetime.utcnow()
+        cutoff  = now - timedelta(days=CURRENT_MONTH_DAYS)
+        dates_found = []
+
+        # Sold dates appear as "Sold  DD MMM YYYY" or similar
+        for pat in [
+            r"Sold\s+(\d{1,2}\s+\w{3,9}\s+\d{4})",
+            r"Verkauft\s+am\s+(\d{1,2}\.\s*\w{3,9}\s*\d{4})",
+            r"Venduto\s+il\s+(\d{1,2}\s+\w{3,9}\s+\d{4})",
+            r"data-datetimedisplay=\"(\d{4}-\d{2}-\d{2})",
+            r'"soldDate"\s*:\s*"(\d{4}-\d{2}-\d{2})',
+        ]:
+            for m in re.finditer(pat, html, re.IGNORECASE):
+                raw = m.group(1)
+                for fmt in ("%d %b %Y", "%d %B %Y", "%Y-%m-%d", "%d. %b %Y"):
+                    try:
+                        dt = datetime.strptime(raw.strip(), fmt)
+                        if dt >= cutoff:
+                            dates_found.append(dt)
+                        break
+                    except ValueError:
+                        continue
+
+        # ── Weekly bucketing ──────────────────────────────────────
+        weeks = [0, 0, 0, 0]   # week 0 = most recent 7 days, week 3 = 22–30 days ago
+        for dt in dates_found:
+            age_days = (now - dt).days
+            bucket   = min(age_days // 7, 3)
+            weeks[bucket] += 1
+
+        total        = sum(weeks)
+        per_week_avg = round(total / 4) if total > 0 else 0
+
+        # ── Consistency: no week should be 0 and no week > 3x avg ─
+        non_zero     = [w for w in weeks if w > 0]
+        consistent   = (
+            len(non_zero) >= MIN_WEEKS_CONSISTENT
+            and all(w <= per_week_avg * 3 for w in weeks)
+            and all(w >= max(1, per_week_avg // 4) for w in weeks if per_week_avg > 0)
+        )
+
+        print(
+            f"[BOT]   Sales (30d): total={total} avg/wk={per_week_avg} "
+            f"weeks={weeks} consistent={consistent}",
+            file=sys.stderr,
+        )
+        return {
+            "total":        total,
+            "per_week_avg": per_week_avg,
+            "weeks":        weeks,
+            "consistent":   consistent,
+        }
+
+    except Exception as e:
+        print(f"[BOT]   Sales scrape error: {e}", file=sys.stderr)
+        return {"total": 0, "per_week_avg": 0, "weeks": [], "consistent": False}
+
+
+# ─────────────────────────────────────────────────────────────────
+# ✅ v6 NEW: Active listing count (competition analysis)
+# ─────────────────────────────────────────────────────────────────
+
+async def count_active_listings(page, keyword: str, base_url: str) -> int:
+    """Return number of active BIN listings for competition scoring."""
+    try:
+        encoded = keyword.replace(" ", "+")
+        url     = f"{base_url}/sch/i.html?_nkw={encoded}&LH_BIN=1&_ipg=1"
+        await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        await asyncio.sleep(1.0)
+        html = await page.content()
+
+        # eBay usually says "X results for ..."
+        m = re.search(
+            r'([\d,]+)\s*(?:results?|Ergebnisse|risultati|résultats|articoli)',
+            html, re.I,
+        )
+        if m:
+            count = int(m.group(1).replace(",", ""))
+            print(f"[BOT]   Active listings: {count}", file=sys.stderr)
+            return count
+
+    except Exception as e:
+        print(f"[BOT]   Active listing count error: {e}", file=sys.stderr)
+    return 0
+
+
+# ─────────────────────────────────────────────────────────────────
+# ✅ v6: Location / shipping validation
+# ─────────────────────────────────────────────────────────────────
+
+def is_local_shipping(product: dict, country_cfg: dict) -> bool:
+    """
+    Returns True if the product appears to ship from within the target country.
+    We check the shippingCountry field parsed from the listing, and the URL domain.
+    """
+    target_code = country_cfg["country_code"].lower()
+    target_name = country_cfg["name"].lower()
+
+    ship_country = product.get("shippingCountry", "").lower()
+    url          = product.get("url", "").lower()
+
+    # If we have explicit country data, use it
+    if ship_country:
+        return (target_code in ship_country or target_name in ship_country)
+
+    # Fallback: check that the listing URL belongs to the right eBay domain
+    domain_map = {
+        "gb": "ebay.co.uk",
+        "de": "ebay.de",
+        "it": "ebay.it",
+        "au": "ebay.com.au",
+    }
+    expected_domain = domain_map.get(target_code, "")
+    return expected_domain in url
+
+
+# ─────────────────────────────────────────────────────────────────
+# Get lowest eBay price (unchanged from v5)
 # ─────────────────────────────────────────────────────────────────
 
 async def get_lowest_ebay_price(page, keyword: str, base_url: str) -> float:
-    """Search eBay sorted by lowest price to find the floor price."""
     try:
         encoded = keyword.replace(" ", "+")
-        # _sop=15 = sort by price lowest first, LH_BIN=1 = Buy It Now only
         url = f"{base_url}/sch/i.html?_nkw={encoded}&_sop=15&LH_BIN=1&_ipg=20"
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         await asyncio.sleep(1.5)
         html = await page.content()
 
         prices = []
-        # Extract prices from the page
         for pat in [
             r'class="[^"]*s-item__price[^"]*"[^>]*>(.*?)</span>',
             r'"price":\s*\{"value":\s*"?([\d.]+)"?',
         ]:
             for m in re.finditer(pat, html, re.DOTALL | re.IGNORECASE):
                 raw = re.sub(r"<[^>]+>", "", m.group(1))
-                p = parse_price(raw)
+                p   = parse_price(raw)
                 if p > 0:
                     prices.append(p)
 
@@ -481,20 +737,16 @@ async def get_lowest_ebay_price(page, keyword: str, base_url: str) -> float:
 
 
 # ─────────────────────────────────────────────────────────────────
-# ✅ NEW: AliExpress scraper with filters
+# AliExpress scraper (unchanged from v5, filters already applied)
 # ─────────────────────────────────────────────────────────────────
 
 async def find_aliexpress_product(page, keyword: str) -> Optional[dict]:
-    """
-    Search AliExpress for a product matching the filters:
-    - Rating: 4.5 – 4.9
-    - Reviews: 30+
-    - Delivery: 3–7 days
-    - Free shipping
-    """
     try:
         encoded = keyword.replace(" ", "+")
-        url = f"https://www.aliexpress.com/wholesale?SearchText={encoded}&SortType=default&shipCountry=gb&isFreeShip=y"
+        url = (
+            f"https://www.aliexpress.com/wholesale"
+            f"?SearchText={encoded}&SortType=default&shipCountry=gb&isFreeShip=y"
+        )
         await page.goto(url, wait_until="domcontentloaded", timeout=35000)
         await asyncio.sleep(random.uniform(2.0, 3.5))
         html = await page.content()
@@ -503,17 +755,15 @@ async def find_aliexpress_product(page, keyword: str) -> Optional[dict]:
             print(f"[BOT]   AliExpress blocked", file=sys.stderr)
             return None
 
-        # Try to find product cards
         items = _parse_aliexpress_html(html)
         print(f"[BOT]   AliExpress raw items: {len(items)}", file=sys.stderr)
 
         for item in items:
-            rating   = item.get("rating", 0.0)
-            reviews  = item.get("reviews", 0)
-            delivery = item.get("deliveryDays", 99)
+            rating    = item.get("rating", 0.0)
+            reviews   = item.get("reviews", 0)
+            delivery  = item.get("deliveryDays", 99)
             free_ship = item.get("freeShipping", False)
 
-            # ✅ Apply all filters
             if rating < ALI_MIN_RATING or rating > ALI_MAX_RATING:
                 continue
             if reviews < ALI_MIN_REVIEWS:
@@ -523,7 +773,11 @@ async def find_aliexpress_product(page, keyword: str) -> Optional[dict]:
             if not free_ship:
                 continue
 
-            print(f"[BOT]   AliExpress match: rating={rating} reviews={reviews} delivery={delivery}d free={free_ship}", file=sys.stderr)
+            print(
+                f"[BOT]   AliExpress match: rating={rating} reviews={reviews} "
+                f"delivery={delivery}d free={free_ship}",
+                file=sys.stderr,
+            )
             return item
 
         print(f"[BOT]   No AliExpress item passed filters", file=sys.stderr)
@@ -535,10 +789,7 @@ async def find_aliexpress_product(page, keyword: str) -> Optional[dict]:
 
 
 def _parse_aliexpress_html(html: str) -> list:
-    """Parse AliExpress search results HTML."""
     items = []
-
-    # Strategy 1: JSON blobs in script tags
     scripts = re.findall(r"<script[^>]*>(.*?)</script>", html, re.DOTALL | re.IGNORECASE)
     for script in scripts:
         if "itemId" not in script and "productId" not in script and "item_id" not in script:
@@ -550,11 +801,8 @@ def _parse_aliexpress_html(html: str) -> list:
             item = _ali_from_dict(d)
             if item:
                 items.append(item)
-
     if items:
         return items
-
-    # Strategy 2: HTML regex
     chunks = re.split(r'(?=<div[^>]+class="[^"]*product-card|[^"]*list--gallery)', html)
     for chunk in chunks[:60]:
         if len(chunk) < 200:
@@ -562,13 +810,10 @@ def _parse_aliexpress_html(html: str) -> list:
         item = _ali_from_html_chunk(chunk)
         if item:
             items.append(item)
-
     return items
 
 
 def _ali_from_dict(d: dict) -> Optional[dict]:
-    """Extract AliExpress product from a JSON dict."""
-    # Price
     price = 0.0
     for k in ("salePrice", "price", "originalPrice", "minPrice", "promotionPrice"):
         v = d.get(k)
@@ -582,7 +827,6 @@ def _ali_from_dict(d: dict) -> Optional[dict]:
     if price <= 0:
         return None
 
-    # URL
     url = ""
     for k in ("productUrl", "itemUrl", "url", "detailUrl"):
         v = d.get(k)
@@ -596,7 +840,6 @@ def _ali_from_dict(d: dict) -> Optional[dict]:
     if not url:
         return None
 
-    # Rating
     rating = 0.0
     for k in ("starRating", "averageStar", "rating", "score", "evaRate"):
         v = d.get(k)
@@ -605,7 +848,6 @@ def _ali_from_dict(d: dict) -> Optional[dict]:
             if rating > 0:
                 break
 
-    # Reviews
     reviews = 0
     for k in ("reviews", "reviewCount", "evaCount", "totalEvaluation", "feedbackCount"):
         v = d.get(k)
@@ -614,7 +856,6 @@ def _ali_from_dict(d: dict) -> Optional[dict]:
             if reviews > 0:
                 break
 
-    # Free shipping
     free_ship = False
     for k in ("freeShipping", "isFreeShip", "hasFreeShipping", "shippingFee"):
         v = d.get(k)
@@ -629,22 +870,15 @@ def _ali_from_dict(d: dict) -> Optional[dict]:
         if free_ship:
             break
 
-    # Delivery days — try to parse from shipping info
     delivery_days = _estimate_delivery_days(d)
-
     return {
-        "price": price,
-        "url": url,
-        "rating": rating,
-        "reviews": reviews,
-        "freeShipping": free_ship,
+        "price": price, "url": url, "rating": rating,
+        "reviews": reviews, "freeShipping": free_ship,
         "deliveryDays": delivery_days,
     }
 
 
 def _ali_from_html_chunk(chunk: str) -> Optional[dict]:
-    """Extract AliExpress product from HTML chunk."""
-    # Price
     price = 0.0
     pm = re.search(r'(?:US\s*)?\$\s*([\d,]+\.?\d*)', chunk)
     if pm:
@@ -652,7 +886,6 @@ def _ali_from_html_chunk(chunk: str) -> Optional[dict]:
     if price <= 0:
         return None
 
-    # URL
     url = ""
     um = re.search(r'href="(https?://(?:www\.)?aliexpress\.com/item/[^"]+)"', chunk, re.I)
     if um:
@@ -660,35 +893,27 @@ def _ali_from_html_chunk(chunk: str) -> Optional[dict]:
     if not url:
         return None
 
-    # Rating
     rating = 0.0
     rm = re.search(r'(?:rating|star)[^>]*>[\s]*([\d.]+)', chunk, re.I)
     if rm:
         rating = parse_rating(rm.group(1))
 
-    # Reviews
     reviews = 0
     revm = re.search(r'([\d,]+)\s*(?:review|sold|feedback)', chunk, re.I)
     if revm:
         reviews = parse_reviews(revm.group(1))
 
-    # Free shipping
-    free_ship = bool(re.search(r"free\s*ship|free\s*delivery|\+\$0\.00", chunk, re.I))
-
+    free_ship     = bool(re.search(r"free\s*ship|free\s*delivery|\+\$0\.00", chunk, re.I))
     delivery_days = _estimate_delivery_days_from_text(chunk)
 
     return {
-        "price": price,
-        "url": url,
-        "rating": rating,
-        "reviews": reviews,
-        "freeShipping": free_ship,
+        "price": price, "url": url, "rating": rating,
+        "reviews": reviews, "freeShipping": free_ship,
         "deliveryDays": delivery_days,
     }
 
 
 def _estimate_delivery_days(d: dict) -> int:
-    """Try to extract delivery days from AliExpress JSON."""
     for k in ("deliveryDays", "shippingLeadDays", "deliveryTime", "estimatedDeliveryDays"):
         v = d.get(k)
         if v:
@@ -697,19 +922,14 @@ def _estimate_delivery_days(d: dict) -> int:
                 days = int(m.group(1))
                 if 1 <= days <= 60:
                     return days
-
-    # Look in nested shipping info
     for k in ("shippingInfo", "logistics", "shipping"):
         v = d.get(k)
         if isinstance(v, dict):
             return _estimate_delivery_days(v)
-
-    # Default: assume within range for AliExpress Express shipping
     return random.randint(ALI_MIN_DELIVERY, ALI_MAX_DELIVERY)
 
 
 def _estimate_delivery_days_from_text(text: str) -> int:
-    """Parse delivery days from HTML text."""
     m = re.search(r"(\d+)\s*[-–]\s*(\d+)\s*(?:business\s*)?days?", text, re.I)
     if m:
         return int(m.group(1))
@@ -722,7 +942,7 @@ def _estimate_delivery_days_from_text(text: str) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────
-# Navigation
+# Navigation helper
 # ─────────────────────────────────────────────────────────────────
 
 async def get_page_html(page, url: str) -> str:
@@ -744,16 +964,13 @@ async def get_page_html(page, url: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────
-# ✅ Google Sheets export
+# Google Sheets export (unchanged structure, extended columns)
 # ─────────────────────────────────────────────────────────────────
 
 def save_to_google_sheets(results: list, keyword: str) -> Optional[str]:
-    """Save results to Google Sheets. Returns the sheet URL or None on failure."""
     if not GSPREAD_AVAILABLE:
         print("[BOT] gspread not installed — skipping Google Sheets.", file=sys.stderr)
-        print("[BOT] Install with: pip install gspread google-auth", file=sys.stderr)
         return None
-
     if not os.path.exists(GOOGLE_SHEETS_KEY_FILE):
         print(f"[BOT] Google service account key not found: {GOOGLE_SHEETS_KEY_FILE}", file=sys.stderr)
         return None
@@ -766,52 +983,47 @@ def save_to_google_sheets(results: list, keyword: str) -> Optional[str]:
         creds  = Credentials.from_service_account_file(GOOGLE_SHEETS_KEY_FILE, scopes=scopes)
         client = gspread.authorize(creds)
 
-        # Create or open spreadsheet
         try:
             sh = client.open(GOOGLE_SHEETS_SHEET_NAME)
         except gspread.SpreadsheetNotFound:
             sh = client.create(GOOGLE_SHEETS_SHEET_NAME)
             sh.share(None, perm_type="anyone", role="reader")
 
-        # Add a new worksheet for this search
         tab_name = f"{keyword[:20]} {datetime.now().strftime('%m-%d %H:%M')}"
         try:
-            ws = sh.add_worksheet(title=tab_name, rows=len(results) + 5, cols=16)
+            ws = sh.add_worksheet(title=tab_name, rows=len(results) + 5, cols=20)
         except Exception:
             ws = sh.get_worksheet(0)
             ws.clear()
 
-        # Headers
         headers = [
             "#", "Title", "Country", "Currency",
             "eBay Price", "eBay Lowest", "Ali Price", "Ali Rating", "Ali Reviews",
-            "Profit", "Margin %", "Sold/Week",
-            "Free Shipping", "Delivery Days",
+            "Profit", "Margin %",
+            "Sales/Week (Avg)", "Total Sold (30d)", "Weekly Breakdown", "Consistent?",
+            "Competition", "Active Listings",
+            "Free Shipping", "Local Shipping", "Delivery Days",
             "eBay Link", "AliExpress Link",
+            "Why Good Product",
         ]
         ws.append_row(headers)
 
-        # Data rows
         rows = []
         for i, r in enumerate(results, 1):
             margin = round((r["profit"] / r["ebayPrice"]) * 100, 1) if r["ebayPrice"] else 0
             rows.append([
-                i,
-                r["title"],
-                r["country"],
-                r["currency"],
-                r["ebayPrice"],
-                r["ebayLowestPrice"],
-                r["aliexpressPrice"],
-                r["aliRating"],
-                r["aliReviews"],
-                r["profit"],
-                f"{margin}%",
-                r["soldLastWeek"],
+                i, r["title"], r["country"], r["currency"],
+                r["ebayPrice"], r["ebayLowestPrice"], r["aliexpressPrice"],
+                r["aliRating"], r["aliReviews"],
+                r["profit"], f"{margin}%",
+                r["soldPerWeek"], r["totalSoldMonth"], r["weeklyConsistency"],
+                "Yes" if r.get("weeklyConsistency") else "No",
+                r["competitionLevel"], r["activeListings"],
                 "Yes" if r["freeShipping"] else "No",
+                "Yes" if r["localShipping"] else "No",
                 r["deliveryDays"],
-                r["ebayUrl"],
-                r["aliexpressUrl"],
+                r["ebayUrl"], r["aliexpressUrl"],
+                r["whyGoodProduct"],
             ])
 
         if rows:
@@ -828,7 +1040,7 @@ def save_to_google_sheets(results: list, keyword: str) -> Optional[str]:
 
 
 # ─────────────────────────────────────────────────────────────────
-# Excel export
+# Excel export (extended for v6)
 # ─────────────────────────────────────────────────────────────────
 
 HEADER_BG  = "1F3864"
@@ -837,14 +1049,20 @@ ALT_ROW_BG = "EEF2FF"
 PROFIT_POS = "C6EFCE"
 PROFIT_NEG = "FFC7CE"
 LINK_COLOR = "2E75B6"
+LOW_COMP   = "C6EFCE"
+MED_COMP   = "FFEB9C"
+HIGH_COMP  = "FFC7CE"
 
 COLUMNS = [
-    ("#",              5),  ("Title",          52), ("Country",       10),
-    ("Currency",       9),  ("eBay Price",     12), ("eBay Lowest",   12),
-    ("Ali Price",     12),  ("Ali Rating",     11), ("Ali Reviews",   11),
-    ("Profit",        10),  ("Margin %",       10), ("Sold/Week",     11),
-    ("Free Shipping", 14),  ("Delivery",       12),
-    ("eBay Link",     18),  ("AliExpress",     18),
+    ("#",               5),  ("Title",          48), ("Country",        10),
+    ("Currency",        9),  ("eBay Price",     12), ("eBay Lowest",    12),
+    ("Ali Price",      12),  ("Ali Rating",     11), ("Ali Reviews",    11),
+    ("Profit",         10),  ("Margin %",       10),
+    ("Sales/Week",     12),  ("Total (30d)",    12), ("Wk Breakdown",   22),
+    ("Competition",    13),  ("Listings",       10),
+    ("Free Ship",      11),  ("Local Ship",     11), ("Delivery",       14),
+    ("eBay Link",      16),  ("AliExpress",     16),
+    ("Why Good",       55),
 ]
 
 
@@ -863,28 +1081,31 @@ def save_to_excel(results: list, keyword: str, output_path: str) -> None:
     # ── Summary sheet ──────────────────────────────────────────────
     ws_s = wb.active
     ws_s.title = "Summary"
-    ws_s.merge_cells("A1:G1")
+    ws_s.merge_cells("A1:H1")
     c = ws_s["A1"]
-    c.value     = f'eBay Hunt — "{keyword}"'
+    c.value     = f'eBay Hunt v6 — "{keyword}"'
     c.font      = Font(name="Arial", bold=True, size=14, color=HEADER_FG)
     c.fill      = PatternFill("solid", fgColor=HEADER_BG)
     c.alignment = Alignment(horizontal="center", vertical="center")
     ws_s.row_dimensions[1].height = 28
 
-    ws_s.merge_cells("A2:G2")
+    ws_s.merge_cells("A2:H2")
     c = ws_s["A2"]
-    c.value = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}   |   Products: {len(results)}   |   Min Sold/Week: {MIN_SOLD_PER_WEEK}   |   Countries: UK, Germany, Italy, Australia"
-    c.font  = Font(name="Arial", italic=True, size=10, color="555555")
+    c.value = (
+        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}   |   "
+        f"Products: {len(results)}   |   Min Sold/Week: {MIN_SOLD_PER_WEEK}–{MAX_SOLD_PER_WEEK}   |   "
+        f"Countries: UK, Germany, Italy, Australia   |   Current month only"
+    )
+    c.font      = Font(name="Arial", italic=True, size=10, color="555555")
     c.alignment = Alignment(horizontal="center")
 
-    for ci, h in enumerate(["Country", "Products", "Avg Profit", "Max Profit", "Avg eBay Price"], 1):
+    for ci, h in enumerate(["Country", "Products", "Avg Profit", "Max Profit", "Avg Sales/Wk", "Low Comp", "Med Comp", "High Comp"], 1):
         cell = ws_s.cell(4, ci, h)
         cell.font      = Font(name="Arial", bold=True, color=HEADER_FG)
         cell.fill      = PatternFill("solid", fgColor=LINK_COLOR)
         cell.alignment = Alignment(horizontal="center")
         cell.border    = _border()
-    ws_s.column_dimensions["A"].width = 14
-    for col, w in zip("BCDE", [10, 12, 12, 16]):
+    for col, w in zip("ABCDEFGH", [14, 10, 12, 12, 13, 10, 10, 10]):
         ws_s.column_dimensions[col].width = w
 
     country_data: dict = {}
@@ -893,15 +1114,19 @@ def save_to_excel(results: list, keyword: str, output_path: str) -> None:
 
     for ri, (country, items) in enumerate(sorted(country_data.items()), 5):
         profits = [i["profit"] for i in items]
-        prices  = [i["ebayPrice"] for i in items]
-        for ci, v in enumerate([country, len(items),
-                                 round(sum(profits)/len(profits), 2),
-                                 max(profits),
-                                 round(sum(prices)/len(prices), 2)], 1):
+        sales   = [i["soldPerWeek"] for i in items]
+        comps   = [i["competitionLevel"] for i in items]
+        for ci, v in enumerate([
+            country, len(items),
+            round(sum(profits) / len(profits), 2),
+            max(profits),
+            round(sum(sales) / len(sales), 1),
+            comps.count("low"), comps.count("medium"), comps.count("high"),
+        ], 1):
             cell = ws_s.cell(ri, ci, v)
             cell.font   = Font(name="Arial", size=10)
             cell.border = _border()
-            if ci >= 3:
+            if ci in (3, 4, 5):
                 cell.number_format = "#,##0.00"
 
     # ── Products sheet ─────────────────────────────────────────────
@@ -923,83 +1148,55 @@ def save_to_excel(results: list, keyword: str, output_path: str) -> None:
             ri - 1, r["title"], r["country"], r["currency"],
             r["ebayPrice"], r["ebayLowestPrice"], r["aliexpressPrice"],
             r["aliRating"], r["aliReviews"],
-            r["profit"], margin, r["soldLastWeek"],
+            r["profit"], margin,
+            r["soldPerWeek"], r["totalSoldMonth"], r["weeklyConsistency"],
+            r["competitionLevel"], r["activeListings"],
             "Yes" if r["freeShipping"] else "No",
+            "Yes" if r["localShipping"] else "No",
             r["deliveryDays"],
             r["ebayUrl"], r["aliexpressUrl"],
+            r["whyGoodProduct"],
         ]
         for ci, val in enumerate(row, 1):
             cell = ws.cell(ri, ci, val)
             cell.font   = Font(name="Arial", size=9)
             cell.border = _border()
-            cell.alignment = Alignment(vertical="center")
-            if alt:
+            cell.alignment = Alignment(vertical="center", wrap_text=(ci == len(row)))
+            if alt and ci not in (10, 15):
                 cell.fill = PatternFill("solid", fgColor=ALT_ROW_BG)
+            # eBay price columns
             if ci in (5, 6, 7):
                 cell.number_format = "#,##0.00"
+            # Profit
             elif ci == 10:
                 cell.number_format = "#,##0.00"
                 cell.fill = PatternFill("solid", fgColor=PROFIT_POS if val >= 0 else PROFIT_NEG)
                 cell.font = Font(name="Arial", size=9, bold=True)
+            # Margin
             elif ci == 11:
                 cell.number_format = '0.0"%"'
-            elif ci in (15, 16) and isinstance(val, str) and val.startswith("http"):
-                label       = "eBay" if ci == 15 else "AliExpress"
-                cell.value  = label
+            # Competition
+            elif ci == 15 and isinstance(val, str):
+                comp_color = {"low": LOW_COMP, "medium": MED_COMP, "high": HIGH_COMP}.get(val, ALT_ROW_BG)
+                cell.fill  = PatternFill("solid", fgColor=comp_color)
+                cell.font  = Font(name="Arial", size=9, bold=True)
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            # Hyperlinks
+            elif ci in (20, 21) and isinstance(val, str) and val.startswith("http"):
+                label      = "eBay" if ci == 20 else "AliExpress"
+                cell.value = label
                 cell.hyperlink = val
-                cell.font   = Font(name="Arial", size=9, color=LINK_COLOR, underline="single")
-        ws.row_dimensions[ri].height = 18
+                cell.font  = Font(name="Arial", size=9, color=LINK_COLOR, underline="single")
+        ws.row_dimensions[ri].height = 22
 
     ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}1"
-
-    # ── Per-country sheets ─────────────────────────────────────────
-    col_h = ["Title", "eBay Price", "eBay Lowest", "Ali Price", "Ali Rating", "Ali Reviews", "Profit", "Margin %", "Sold/wk", "Free Ship", "Delivery", "eBay Link", "AliExpress Link"]
-    col_w = [50, 12, 12, 12, 11, 11, 10, 10, 10, 11, 12, 18, 18]
-    for country, items in sorted(country_data.items()):
-        wsc = wb.create_sheet(country[:31])
-        for ci, (h, w) in enumerate(zip(col_h, col_w), 1):
-            cell = wsc.cell(1, ci, h)
-            cell.font      = Font(name="Arial", bold=True, color=HEADER_FG, size=10)
-            cell.fill      = PatternFill("solid", fgColor=LINK_COLOR)
-            cell.alignment = Alignment(horizontal="center")
-            cell.border    = _border()
-            wsc.column_dimensions[get_column_letter(ci)].width = w
-        wsc.freeze_panes = "A2"
-        for ri2, item in enumerate(items, 2):
-            margin2 = round((item["profit"] / item["ebayPrice"]) * 100, 1) if item["ebayPrice"] else 0
-            row2    = [
-                item["title"], item["ebayPrice"], item["ebayLowestPrice"],
-                item["aliexpressPrice"], item["aliRating"], item["aliReviews"],
-                item["profit"], margin2, item["soldLastWeek"],
-                "Yes" if item["freeShipping"] else "No",
-                item["deliveryDays"], item["ebayUrl"], item["aliexpressUrl"],
-            ]
-            for ci, v in enumerate(row2, 1):
-                cell = wsc.cell(ri2, ci, v)
-                cell.font   = Font(name="Arial", size=9)
-                cell.border = _border()
-                if ri2 % 2 == 0:
-                    cell.fill = PatternFill("solid", fgColor=ALT_ROW_BG)
-                if ci in (2, 3, 4):
-                    cell.number_format = "#,##0.00"
-                elif ci == 7:
-                    cell.number_format = "#,##0.00"
-                    cell.fill = PatternFill("solid", fgColor=PROFIT_POS if v >= 0 else PROFIT_NEG)
-                    cell.font = Font(name="Arial", size=9, bold=True)
-                elif ci in (12, 13) and isinstance(v, str) and v.startswith("http"):
-                    label      = "eBay" if ci == 12 else "AliExpress"
-                    cell.value = label
-                    cell.hyperlink = v
-                    cell.font  = Font(name="Arial", size=9, color=LINK_COLOR, underline="single")
-            wsc.row_dimensions[ri2].height = 18
-        wsc.auto_filter.ref = f"A1:{get_column_letter(len(col_h))}1"
 
     wb.save(output_path)
     print(f"[BOT] Excel saved → {output_path}", file=sys.stderr)
 
 
 # ─────────────────────────────────────────────────────────────────
-# Main bot runner
+# Main bot runner (v6 — strict criteria applied)
 # ─────────────────────────────────────────────────────────────────
 
 async def run_bot(keyword: str) -> list:
@@ -1031,7 +1228,6 @@ async def run_bot(keyword: str) -> list:
             print(f"\n[BOT] ── {name} ─────────────────────────────", file=sys.stderr)
 
             context = None
-            html    = ""
             try:
                 ua      = random.choice(USER_AGENTS)
                 context = await browser.new_context(
@@ -1048,12 +1244,15 @@ async def run_bot(keyword: str) -> list:
                     "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
                     "window.chrome={runtime:{}};"
                 )
-                page    = await context.new_page()
+                page = await context.new_page()
 
-                # ── eBay search (sorted by most sold) ────────────────
+                # ── eBay search (sorted by most sold) ─────────────
                 encoded = keyword.replace(" ", "+")
-                url     = f"{base_url}/sch/i.html?_nkw={encoded}&_sop=12&_ipg={ITEMS_PER_PAGE}&LH_BIN=1"
-                html    = await get_page_html(page, url)
+                url     = (
+                    f"{base_url}/sch/i.html"
+                    f"?_nkw={encoded}&_sop=12&_ipg={ITEMS_PER_PAGE}&LH_BIN=1"
+                )
+                html = await get_page_html(page, url)
 
                 if not html or is_blocked_page(html):
                     print(f"[BOT] Blocked/empty in {name}", file=sys.stderr)
@@ -1062,24 +1261,63 @@ async def run_bot(keyword: str) -> list:
                 dump_debug(html, name)
                 page_products = extract_products(html, name, currency)
 
-                # ✅ Filter: min 4 sold/week
-                qualified = [p for p in page_products if p["soldLastWeek"] >= MIN_SOLD_PER_WEEK]
-                print(f"[BOT]   {len(page_products)} total, {len(qualified)} with {MIN_SOLD_PER_WEEK}+ sold/week", file=sys.stderr)
+                # ── FILTER 1: Skip branded products ───────────────
+                unbranded = [p for p in page_products if not is_branded(p["title"])]
+                print(
+                    f"[BOT]   {len(page_products)} total, {len(unbranded)} non-branded",
+                    file=sys.stderr,
+                )
+
+                # ── FILTER 2: Local shipping match ────────────────
+                local_ship = [p for p in unbranded if is_local_shipping(p, cfg)]
+                print(
+                    f"[BOT]   {len(local_ship)} with local shipping match",
+                    file=sys.stderr,
+                )
 
                 added = 0
-                for product in qualified:
+                for product in local_ship:
                     if added >= PRODUCTS_PER_COUNTRY:
                         break
                     if product["url"] in seen_urls:
                         continue
+
+                    # ── FILTER 3: Current-month sold data ─────────
+                    sales_data = await get_current_month_sales(
+                        page, product["title"], base_url, cfg
+                    )
+                    per_week   = sales_data["per_week_avg"]
+                    consistent = sales_data["consistent"]
+
+                    # ── FILTER 4: 10–50 sales/week (strict) ───────
+                    if per_week < MIN_SOLD_PER_WEEK or per_week > MAX_SOLD_PER_WEEK:
+                        print(
+                            f"[BOT]   SKIP (sales {per_week}/wk out of range): "
+                            f"{product['title'][:40]}",
+                            file=sys.stderr,
+                        )
+                        continue
+
+                    # ── FILTER 5: Consistent sales ────────────────
+                    if not consistent:
+                        print(
+                            f"[BOT]   SKIP (inconsistent sales): {product['title'][:40]}",
+                            file=sys.stderr,
+                        )
+                        continue
+
                     seen_urls.add(product["url"])
 
-                    # ✅ Get lowest eBay price
+                    # ── Competition analysis ───────────────────────
+                    active_count  = await count_active_listings(page, product["title"], base_url)
+                    comp_level    = competition_label(active_count)
+
+                    # ── Lowest eBay price ──────────────────────────
                     lowest_price = await get_lowest_ebay_price(page, product["title"], base_url)
                     if lowest_price <= 0:
                         lowest_price = product["price"]
 
-                    # ✅ Find AliExpress product with filters
+                    # ── AliExpress match ───────────────────────────
                     ali_item = await find_aliexpress_product(page, product["title"])
 
                     if ali_item:
@@ -1090,8 +1328,6 @@ async def run_bot(keyword: str) -> list:
                         delivery_str = f"{ali_item['deliveryDays']}-{ali_item['deliveryDays'] + 2} days"
                         free_ship    = ali_item["freeShipping"]
                     else:
-                        # AliExpress scraping failed — fall back to estimate
-                        # Still include the product but flag that Ali data is estimated
                         ali_price    = round(product["price"] * random.uniform(0.25, 0.38), 2)
                         ali_kw       = "+".join(product["title"].split()[:5])
                         ali_url      = f"https://www.aliexpress.com/wholesale?SearchText={ali_kw}"
@@ -1099,29 +1335,46 @@ async def run_bot(keyword: str) -> list:
                         ali_reviews  = 0
                         delivery_str = f"{ALI_MIN_DELIVERY}-{ALI_MAX_DELIVERY} days"
                         free_ship    = product["freeShipping"]
-                        print(f"[BOT]   Using estimated Ali data for: {product['title'][:40]}", file=sys.stderr)
+                        print(
+                            f"[BOT]   Using estimated Ali data for: {product['title'][:40]}",
+                            file=sys.stderr,
+                        )
 
-                    # ✅ Profit based on lowest eBay price (worst case scenario)
-                    profit = calculate_profit(lowest_price, ali_price)
+                    profit         = calculate_profit(lowest_price, ali_price)
+                    weeks_str      = " / ".join(str(w) for w in sales_data["weeks"])
+                    why_good       = build_why_good(
+                        product, ali_item, comp_level, per_week, consistent, profit
+                    )
+                    local_flag     = is_local_shipping(product, cfg)
 
                     results.append(asdict(ProductResult(
-                        title            = product["title"],
-                        country          = product["country"],
-                        currency         = product["currency"],
-                        ebayPrice        = product["price"],
-                        ebayLowestPrice  = lowest_price,
-                        aliexpressPrice  = ali_price,
-                        aliRating        = ali_rating,
-                        aliReviews       = ali_reviews,
-                        profit           = profit,
-                        soldLastWeek     = product["soldLastWeek"],
-                        freeShipping     = free_ship,
-                        deliveryDays     = delivery_str,
-                        ebayUrl          = product["url"],
-                        aliexpressUrl    = ali_url,
+                        title             = product["title"],
+                        country           = product["country"],
+                        currency          = product["currency"],
+                        ebayPrice         = product["price"],
+                        ebayLowestPrice   = lowest_price,
+                        aliexpressPrice   = ali_price,
+                        aliRating         = ali_rating,
+                        aliReviews        = ali_reviews,
+                        profit            = profit,
+                        soldPerWeek       = per_week,
+                        totalSoldMonth    = sales_data["total"],
+                        weeklyConsistency = weeks_str,
+                        competitionLevel  = comp_level,
+                        activeListings    = active_count,
+                        freeShipping      = free_ship,
+                        localShipping     = local_flag,
+                        deliveryDays      = delivery_str,
+                        ebayUrl           = product["url"],
+                        aliexpressUrl     = ali_url,
+                        whyGoodProduct    = why_good,
                     )))
                     added += 1
-                    print(f"[BOT]   ✅ Added: {product['title'][:50]} | profit={profit}", file=sys.stderr)
+                    print(
+                        f"[BOT]   ✅ Added: {product['title'][:50]} | "
+                        f"sales/wk={per_week} comp={comp_level} profit={profit}",
+                        file=sys.stderr,
+                    )
 
                 print(f"[BOT] Added {added} products from {name}", file=sys.stderr)
 
@@ -1167,10 +1420,8 @@ if __name__ == "__main__":
             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
             xlsx_path = f"ebay_results_{safe_kw}_{timestamp}.xlsx"
 
-            # Save Excel
             save_to_excel(res, keyword, xlsx_path)
 
-            # Save Google Sheets
             sheets_url = save_to_google_sheets(res, keyword)
             if sheets_url:
                 print(f"[BOT] Google Sheets: {sheets_url}", file=sys.stderr)
