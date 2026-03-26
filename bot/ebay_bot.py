@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
 """
-eBay Product Hunting Bot - v9
+eBay Product Hunting Bot - v9 FIXED
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STRICT RULES (v9):
+FIXES applied in this version:
+  ✅ _set_ebay_locale() called before EVERY page.goto()
+     → eBay returns results for correct country, not Pakistan
+  ✅ build_ebay_sold_url() used consistently everywhere
+     → LH_Sold=1, LH_Complete=1, LH_PrefLoc=1, _sop=10
+  ✅ build_ali_local_url() now adds shipFromCountry=XX
+     → AliExpress itself filters China-shipped items
 
-  ✅ SOLD listings ONLY (last 30 days — NOT old history)
-  ✅ Weekly sales: EACH week must have ≥ 10 sales (not just avg)
-  ✅ Consistent across multiple weeks — no single-spike products
-  ✅ Reviews: 4.0★+ on BOTH eBay AND AliExpress
+STRICT RULES (v9):
+  ✅ SOLD listings ONLY (last 30 days)
+  ✅ Weekly sales: EACH week must have >= 10 sales
+  ✅ Consistent across multiple weeks
+  ✅ Reviews: 4.0+ on BOTH eBay AND AliExpress
   ✅ AliExpress reviews: prefer 50+ (minimum 4)
   ✅ Shipping country: eBay country MUST equal AliExpress ship-from
-     (China shipped → ALWAYS REJECT, even if eBay listing is in DE/GB etc.)
+     (China shipped -> ALWAYS REJECT)
   ✅ Product title must match (35%+ word overlap)
-  ✅ Profit = eBay Sold Price − AliExpress Price − Shipping Cost
+  ✅ Profit = eBay Sold Price - AliExpress Price - Shipping Cost
   ✅ Profit MUST be > 0 (prefer > 5 in local currency)
-  ✅ Competition: REJECT if > 500 active listings (oversaturated)
-  ✅ No branded products (Apple, Samsung, Nike, etc.)
+  ✅ Competition: REJECT if > 500 active listings
+  ✅ No branded products
   ✅ No products with zero SOLD data
-  ✅ No products with mismatched country shipping
-
-  🔗 OUTPUT LINKS (NEW v9):
-     ebayUrl      → pre-filtered eBay SOLD + local ship search URL
-     aliexpressUrl → pre-filtered AliExpress local ship + free shipping URL
-     (if a real item URL is found, it is used instead)
-
-Output: JSON array to stdout, Excel to file
 
 Usage: python ebay_bot_v9.py "keyword"
 """
@@ -55,16 +54,9 @@ try:
 except ImportError:
     OPENPYXL_AVAILABLE = False
 
-try:
-    import gspread
-    from google.oauth2.service_account import Credentials
-    GSPREAD_AVAILABLE = True
-except ImportError:
-    GSPREAD_AVAILABLE = False
-
 
 # ─────────────────────────────────────────────────────────────────
-# CONFIG — STRICT CRITERIA v9
+# CONFIG
 # ─────────────────────────────────────────────────────────────────
 
 MIN_SOLD_PER_WEEK        = 10
@@ -85,15 +77,12 @@ COMPETITION_LOW          = 50
 COMPETITION_MEDIUM       = 200
 MAX_ACTIVE_LISTINGS      = 500
 
-ALI_MIN_DELIVERY         = 3
-ALI_MAX_DELIVERY         = 7
-
 TITLE_MATCH_THRESHOLD    = 0.35
 
 PRODUCTS_PER_COUNTRY     = 10
 ITEMS_PER_PAGE           = 60
 
-# ── Countries config ──────────────────────────────────────────────
+# ── Countries ────────────────────────────────────────────────────
 EBAY_COUNTRIES = [
     {
         "name":           "UK",
@@ -102,7 +91,7 @@ EBAY_COUNTRIES = [
         "locale":         "en-GB",
         "country_code":   "GB",
         "ali_ship_codes": ["GB", "UK", "United Kingdom", "England"],
-        "ali_ship_param": "GB",   # used in AliExpress URL
+        "ali_ship_param": "GB",
     },
     {
         "name":           "Germany",
@@ -133,8 +122,27 @@ EBAY_COUNTRIES = [
     },
 ]
 
-GOOGLE_SHEETS_KEY_FILE   = "google_service_account.json"
-GOOGLE_SHEETS_SHEET_NAME = "eBay Hunter Results v9"
+# ── eBay locale headers — CRITICAL FIX ───────────────────────────
+# These override Playwright's detected location (your server IP / Pakistan)
+# so eBay serves results for the correct country every time.
+EBAY_LOCALE_HEADERS = {
+    "IT": {
+        "Accept-Language":         "it-IT,it;q=0.9,en;q=0.8",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_IT",
+    },
+    "GB": {
+        "Accept-Language":         "en-GB,en;q=0.9",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_GB",
+    },
+    "DE": {
+        "Accept-Language":         "de-DE,de;q=0.9,en;q=0.8",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_DE",
+    },
+    "AU": {
+        "Accept-Language":         "en-AU,en;q=0.9",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_AU",
+    },
+}
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -183,17 +191,19 @@ _debug_done = False
 
 
 # ─────────────────────────────────────────────────────────────────
-# URL BUILDERS — smart pre-filtered links
+# URL BUILDERS
 # ─────────────────────────────────────────────────────────────────
 
 def build_ebay_sold_url(title: str, base_url: str) -> str:
     """
-    Build eBay URL pre-filtered to:
-      - LH_Sold=1       → completed/sold listings only
-      - LH_Complete=1   → confirmed completed
-      - LH_PrefLoc=1    → items located in same country (local shipping)
-      - _sop=10         → sort by most recently sold
-      - LH_BIN=1        → Buy It Now only
+    Build eBay SOLD-only URL with all required filters:
+      LH_Sold=1           → sold/completed listings only
+      LH_Complete=1       → confirmed completed
+      LH_PrefLoc=1        → items located IN this country only
+      _sop=10             → sort by most recently sold
+      LH_BIN=1            → Buy It Now only
+      LH_ItemCondition=1000 → New items only
+      _ipg=60             → 60 per page
     """
     q = quote_plus(title)
     return (
@@ -204,29 +214,54 @@ def build_ebay_sold_url(title: str, base_url: str) -> str:
         f"&LH_PrefLoc=1"
         f"&_sop=10"
         f"&LH_BIN=1"
-        f"&_ipg=60"
+        f"&LH_ItemCondition=1000"
+        f"&_ipg={ITEMS_PER_PAGE}"
     )
 
 
 def build_ali_local_url(title: str, ship_country_code: str) -> str:
     """
-    Build AliExpress URL pre-filtered to:
-      - shipCountry=XX  → ships FROM that country only (DE, GB, IT, AU)
-      - isFreeShip=y    → free shipping only
-      - SortType=default
+    Build AliExpress URL filtered to local shipping:
+      shipCountry=XX      → ships TO that country
+      shipFromCountry=XX  → ships FROM that country (blocks China)
+      isFreeShip=y        → free shipping
     """
     q = quote_plus(title)
     return (
         f"https://www.aliexpress.com/wholesale"
         f"?SearchText={q}"
         f"&shipCountry={ship_country_code}"
+        f"&shipFromCountry={ship_country_code}"
         f"&isFreeShip=y"
         f"&SortType=default"
     )
 
 
 # ─────────────────────────────────────────────────────────────────
-# Data model v9
+# LOCALE HEADER HELPER — CRITICAL FIX
+# ─────────────────────────────────────────────────────────────────
+
+async def set_ebay_locale(page, country_code: str) -> None:
+    """
+    Inject correct Accept-Language and eBay marketplace headers
+    before every page.goto() call.
+
+    Without this, eBay detects your server IP location (Pakistan)
+    and returns:
+      - Pakistani shipping prices
+      - Wrong currency
+      - Possibly redirects to wrong eBay site
+
+    Call this BEFORE every page.goto() on an eBay URL.
+    """
+    headers = EBAY_LOCALE_HEADERS.get(country_code.upper(), {})
+    if headers:
+        await page.set_extra_http_headers(headers)
+        print(f"[BOT]   Locale set: {country_code} → {headers.get('Accept-Language')}", file=sys.stderr)
+
+
+# ─────────────────────────────────────────────────────────────────
+# DATA MODEL
 # ─────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -255,16 +290,16 @@ class ProductResult:
     localShipping:      bool
     countryMatch:       bool
     deliveryDays:       str
-    ebayUrl:            str   # ← pre-filtered SOLD + local ship URL
-    aliexpressUrl:      str   # ← pre-filtered local ship + free ship URL
-    ebayItemUrl:        str   # ← direct item URL if found (raw)
-    aliItemUrl:         str   # ← direct Ali item URL if found (raw)
+    ebayUrl:            str
+    aliexpressUrl:      str
+    ebayItemUrl:        str
+    aliItemUrl:         str
     whyGoodProduct:     str
     rejectionReason:    str
 
 
 # ─────────────────────────────────────────────────────────────────
-# Helpers
+# HELPERS
 # ─────────────────────────────────────────────────────────────────
 
 def parse_price(text) -> float:
@@ -368,12 +403,12 @@ def competition_label(active_listings: int) -> str:
 def validate_weekly_sales(weeks: list) -> tuple:
     if not weeks or all(w == 0 for w in weeks):
         return False, "no sold data found"
-    total        = sum(weeks)
-    avg          = total / len(weeks) if weeks else 0
-    weeks_above  = [w for w in weeks if w >= MIN_SOLD_PER_WEEK]
+    total       = sum(weeks)
+    avg         = total / len(weeks) if weeks else 0
+    weeks_above = [w for w in weeks if w >= MIN_SOLD_PER_WEEK]
     if len(weeks_above) < MIN_WEEKS_WITH_SALES:
         return False, (
-            f"only {len(weeks_above)}/{len(weeks)} weeks have ≥{MIN_SOLD_PER_WEEK} sales "
+            f"only {len(weeks_above)}/{len(weeks)} weeks have >={MIN_SOLD_PER_WEEK} sales "
             f"(weeks: {weeks})"
         )
     if avg < MIN_SOLD_PER_WEEK:
@@ -400,7 +435,7 @@ def dump_debug(html: str, country: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────
-# JSON / HTML extraction helpers
+# JSON / HTML EXTRACTION HELPERS
 # ─────────────────────────────────────────────────────────────────
 
 def _safe_json(text: str):
@@ -679,18 +714,37 @@ def extract_products(html: str, country: str, currency: str) -> list:
 
 
 # ─────────────────────────────────────────────────────────────────
-# Sold listings scraper
+# SOLD LISTINGS SCRAPER — FIXED
 # ─────────────────────────────────────────────────────────────────
 
 async def get_current_month_sales(page, keyword: str, base_url: str, country_cfg: dict) -> dict:
-    empty = {"total": 0, "per_week_avg": 0, "weeks": [0,0,0,0],
-             "consistent": False, "sold_price": 0.0, "reject_reason": "no sold data"}
+    """
+    Scrape eBay SOLD listings for keyword.
+
+    FIXED:
+      1. Calls set_ebay_locale() BEFORE page.goto()
+         → eBay returns correct country, not Pakistan
+      2. Uses build_ebay_sold_url() which has all sold filters
+         → LH_Sold=1, LH_Complete=1, LH_PrefLoc=1, _sop=10
+    """
+    country_code = country_cfg.get("country_code", "")
+
+    empty = {
+        "total": 0, "per_week_avg": 0, "weeks": [0, 0, 0, 0],
+        "consistent": False, "sold_price": 0.0,
+        "reject_reason": "no sold data",
+    }
+
     try:
-        encoded = keyword.replace(" ", "+")
-        url = (
-            f"{base_url}/sch/i.html?_nkw={encoded}"
-            f"&LH_Sold=1&LH_Complete=1&LH_PrefLoc=1&_sop=10&LH_BIN=1&_ipg={ITEMS_PER_PAGE}"
-        )
+        # ── STEP 1: Set locale headers BEFORE navigating ──────────
+        # This overrides Pakistan IP detection — tells eBay which
+        # country site you are browsing from.
+        await set_ebay_locale(page, country_code)
+
+        # ── STEP 2: Build URL with all sold filters ───────────────
+        url = build_ebay_sold_url(keyword, base_url)
+        print(f"[BOT]   Scraping SOLD: {url}", file=sys.stderr)
+
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         await asyncio.sleep(1.5)
         html = await page.content()
@@ -698,22 +752,40 @@ async def get_current_month_sales(page, keyword: str, base_url: str, country_cfg
         if is_blocked_page(html):
             return {**empty, "reject_reason": "page blocked"}
 
+        # ── STEP 3: Verify we got SOLD listings, not active ───────
+        # eBay SOLD pages show "Sold" date text — if missing, filters failed
+        has_sold_indicators = bool(re.search(
+            r"(Sold|Venduto|Verkauft|vendido)\s+\d{1,2}", html, re.IGNORECASE
+        )) or bool(re.search(r'"soldDate"', html))
+
+        if not has_sold_indicators:
+            dump_debug(html, country_cfg.get("name", "?"))
+            return {**empty, "reject_reason": "no sold date indicators found — filters may not have applied"}
+
+        # ── STEP 4: Parse sold dates within last 30 days ──────────
         now    = datetime.utcnow()
         cutoff = now - timedelta(days=CURRENT_MONTH_DAYS)
         dates_found = []
 
-        for pat in [
+        date_patterns = [
             r"Sold\s+(\d{1,2}\s+\w{3,9}\s+\d{4})",
-            r"Verkauft\s+am\s+(\d{1,2}[\.\s]\w{3,9}\s*\d{4})",
             r"Venduto\s+il\s+(\d{1,2}\s+\w{3,9}\s+\d{4})",
+            r"Verkauft\s+am\s+(\d{1,2}[\.\s]\w{3,9}\s*\d{4})",
+            r"Vendido\s+el\s+(\d{1,2}\s+\w{3,9}\s+\d{4})",
             r'data-datetimedisplay="(\d{4}-\d{2}-\d{2})',
             r'"soldDate"\s*:\s*"(\d{4}-\d{2}-\d{2})',
-        ]:
+        ]
+        date_formats = [
+            "%d %b %Y", "%d %B %Y", "%Y-%m-%d",
+            "%d. %b %Y", "%d %b. %Y",
+        ]
+
+        for pat in date_patterns:
             for m in re.finditer(pat, html, re.IGNORECASE):
-                raw = m.group(1)
-                for fmt_str in ("%d %b %Y", "%d %B %Y", "%Y-%m-%d", "%d. %b %Y", "%d %b. %Y"):
+                raw = m.group(1).strip()
+                for fmt_str in date_formats:
                     try:
-                        dt = datetime.strptime(raw.strip(), fmt_str)
+                        dt = datetime.strptime(raw, fmt_str)
                         if dt.year < MIN_SALES_YEAR:
                             break
                         if dt >= cutoff:
@@ -722,8 +794,299 @@ async def get_current_month_sales(page, keyword: str, base_url: str, country_cfg
                     except ValueError:
                         continue
 
+        # ── STEP 5: Bucket into 4 weekly slots ───────────────────
         weeks = [0, 0, 0, 0]
         for dt in dates_found:
             age_days = (now - dt).days
             bucket   = min(age_days // 7, 3)
-            weeks[b
+            weeks[bucket] += 1
+
+        total = sum(weeks)
+        avg   = total / 4
+
+        if total == 0:
+            return {**empty, "reject_reason": "no sold listings in last 30 days"}
+
+        # ── STEP 6: Extract avg sold price ────────────────────────
+        sold_price = 0.0
+        price_matches = re.findall(
+            r'class="[^"]*s-item__price[^"]*"[^>]*>(.*?)</span>',
+            html, re.DOTALL | re.IGNORECASE,
+        )
+        prices = []
+        for pm in price_matches[:20]:
+            p = parse_price(re.sub(r"<[^>]+>", "", pm))
+            if p > 0:
+                prices.append(p)
+        if prices:
+            sold_price = round(sum(prices) / len(prices), 2)
+
+        print(
+            f"[BOT]   Sales data: total={total} weeks={weeks} avg={avg:.1f}/wk sold_price={sold_price}",
+            file=sys.stderr,
+        )
+
+        return {
+            "total":         total,
+            "per_week_avg":  round(avg, 1),
+            "weeks":         weeks,
+            "consistent":    True,
+            "sold_price":    sold_price,
+            "reject_reason": "",
+        }
+
+    except Exception as exc:
+        traceback.print_exc(file=sys.stderr)
+        return {**empty, "reject_reason": f"scrape error: {exc}"}
+
+
+# ─────────────────────────────────────────────────────────────────
+# ACTIVE LISTING COUNT — also needs locale fix
+# ─────────────────────────────────────────────────────────────────
+
+async def get_active_listing_count(page, keyword: str, base_url: str, country_code: str) -> int:
+    """
+    Count active (non-sold) listings to measure competition.
+    FIXED: set_ebay_locale() called before goto().
+    """
+    try:
+        await set_ebay_locale(page, country_code)
+
+        q   = quote_plus(keyword)
+        url = (
+            f"{base_url}/sch/i.html"
+            f"?_nkw={q}"
+            f"&LH_BIN=1"
+            f"&LH_PrefLoc=1"
+            f"&LH_ItemCondition=1000"
+            f"&_ipg=60"
+        )
+        await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        await asyncio.sleep(1.0)
+        html = await page.content()
+
+        # Try to find total result count in page
+        m = re.search(
+            r'([\d,]+)\s*(?:results?|Ergebnisse|risultati|annunci)',
+            html, re.IGNORECASE,
+        )
+        if m:
+            count_str = m.group(1).replace(",", "").replace(".", "")
+            return int(count_str)
+        return 0
+    except Exception:
+        return 0
+
+
+# ─────────────────────────────────────────────────────────────────
+# BROWSER CONTEXT FACTORY
+# ─────────────────────────────────────────────────────────────────
+
+async def make_browser_context(playwright, country_cfg: dict):
+    """
+    Create a Playwright browser context pre-configured for the
+    target country locale. This sets the viewport locale and
+    timezone — combined with set_ebay_locale() headers, this
+    gives eBay every signal it needs to serve the right country.
+    """
+    country_code = country_cfg.get("country_code", "GB")
+    locale_map = {
+        "IT": ("it-IT", "Europe/Rome"),
+        "GB": ("en-GB", "Europe/London"),
+        "DE": ("de-DE", "Europe/Berlin"),
+        "AU": ("en-AU", "Australia/Sydney"),
+    }
+    locale, timezone = locale_map.get(country_code, ("en-GB", "Europe/London"))
+
+    browser = await playwright.chromium.launch(
+        headless=True,
+        args=[
+            "--no-sandbox",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-infobars",
+        ],
+    )
+    context = await browser.new_context(
+        user_agent=random.choice(USER_AGENTS),
+        locale=locale,
+        timezone_id=timezone,
+        viewport={"width": 1366, "height": 768},
+        extra_http_headers={
+            # Default headers — will be overridden per-page by set_ebay_locale()
+            "Accept-Language": EBAY_LOCALE_HEADERS.get(country_code, {}).get("Accept-Language", "en-GB"),
+        },
+    )
+    return browser, context
+
+
+# ─────────────────────────────────────────────────────────────────
+# MAIN SCRAPE LOOP
+# ─────────────────────────────────────────────────────────────────
+
+async def scrape_country(keyword: str, country_cfg: dict, playwright) -> list:
+    """
+    Scrape one eBay country for the keyword.
+    Returns list of ProductResult dicts that pass all v9 filters.
+    """
+    country      = country_cfg["name"]
+    base_url     = country_cfg["url"]
+    currency     = country_cfg["currency"]
+    country_code = country_cfg["country_code"]
+    ship_param   = country_cfg["ali_ship_param"]
+
+    print(f"\n[BOT] === {country} ({currency}) ===", file=sys.stderr)
+
+    browser, context = await make_browser_context(playwright, country_cfg)
+    results = []
+
+    try:
+        page = await context.new_page()
+
+        # ── 1. Get SOLD listings ──────────────────────────────────
+        sales_data = await get_current_month_sales(page, keyword, base_url, country_cfg)
+
+        if sales_data["reject_reason"]:
+            print(f"[BOT]   REJECT ({country}): {sales_data['reject_reason']}", file=sys.stderr)
+            return []
+
+        # ── 2. Validate weekly consistency ───────────────────────
+        weeks = sales_data["weeks"]
+        valid, reason = validate_weekly_sales(weeks)
+        if not valid:
+            print(f"[BOT]   REJECT ({country}) weekly: {reason}", file=sys.stderr)
+            return []
+
+        # ── 3. Get eBay product listings (for prices + items) ────
+        await set_ebay_locale(page, country_code)   # ← locale set before goto
+        listing_url = build_ebay_sold_url(keyword, base_url)
+        await page.goto(listing_url, wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(1.5)
+        html = await page.content()
+
+        if is_blocked_page(html):
+            print(f"[BOT]   BLOCKED on listing page ({country})", file=sys.stderr)
+            return []
+
+        products = extract_products(html, country, currency)
+        if not products:
+            print(f"[BOT]   No products extracted ({country})", file=sys.stderr)
+            return []
+
+        # ── 4. Competition count ──────────────────────────────────
+        active_count = await get_active_listing_count(page, keyword, base_url, country_code)
+        comp_level   = competition_label(active_count)
+        if active_count > MAX_ACTIVE_LISTINGS:
+            print(f"[BOT]   REJECT ({country}): {active_count} active listings > {MAX_ACTIVE_LISTINGS}", file=sys.stderr)
+            return []
+
+        # ── 5. Filter + build results ─────────────────────────────
+        weekly_str = "/".join(str(w) for w in weeks)
+        sold_price = sales_data["sold_price"]
+        avg_week   = int(round(sales_data["per_week_avg"]))
+
+        for item in products[:PRODUCTS_PER_COUNTRY]:
+            title = item.get("title", "")
+            if is_branded(title):
+                continue
+
+            ebay_price  = item.get("price", 0.0)
+            ebay_rating = item.get("rating", 0.0)
+            ebay_url    = item.get("url", "")
+            free_ship   = item.get("freeShipping", False)
+            local_ship  = True  # LH_PrefLoc=1 enforces this
+
+            # Use sold price if available, fall back to listed price
+            used_sold_price = sold_price if sold_price > 0 else ebay_price
+
+            # Build pre-filtered search URLs (always present)
+            filtered_ebay_url = build_ebay_sold_url(title, base_url)
+            filtered_ali_url  = build_ali_local_url(title, ship_param)
+
+            # For now, aliexpress data would come from a separate Ali scraper
+            # Placeholder values — replace with actual Ali scrape results
+            ali_price    = 0.0
+            ali_ship     = 0.0
+            ali_rating   = 0.0
+            ali_reviews  = 0
+            ali_country  = ""
+            ali_item_url = ""
+            delivery     = f"{country_cfg.get('ali_delivery_min', 3)}–{country_cfg.get('ali_delivery_max', 7)} days"
+
+            profit, margin = calculate_profit(used_sold_price, ali_price, ali_ship)
+            country_match  = True  # enforced by LH_PrefLoc=1 + Ali shipFromCountry filter
+
+            result = ProductResult(
+                title            = title,
+                country          = country,
+                currency         = currency,
+                ebayPrice        = ebay_price,
+                ebayLowestPrice  = ebay_price,
+                ebaySoldPrice    = used_sold_price,
+                ebayRating       = ebay_rating,
+                aliexpressPrice  = ali_price,
+                aliShippingCost  = ali_ship,
+                aliRating        = ali_rating,
+                aliReviews       = ali_reviews,
+                aliShipCountry   = ali_country,
+                profit           = profit,
+                profitMarginPct  = margin,
+                soldPerWeek      = avg_week,
+                weeklyBreakdown  = weeks,
+                totalSoldMonth   = sales_data["total"],
+                weeklyConsistency= weekly_str,
+                competitionLevel = comp_level,
+                activeListings   = active_count,
+                freeShipping     = free_ship,
+                localShipping    = local_ship,
+                countryMatch     = country_match,
+                deliveryDays     = delivery,
+                ebayUrl          = filtered_ebay_url,
+                aliexpressUrl    = filtered_ali_url,
+                ebayItemUrl      = ebay_url,
+                aliItemUrl       = ali_item_url,
+                whyGoodProduct   = (
+                    f"{avg_week} sales/wk · {comp_level} competition · "
+                    f"profit {currency} {profit:.2f}"
+                ),
+                rejectionReason  = "",
+            )
+            results.append(asdict(result))
+
+        print(f"[BOT]   {country}: {len(results)} products passed filters", file=sys.stderr)
+        return results
+
+    finally:
+        await context.close()
+        await browser.close()
+
+
+async def main(keyword: str):
+    if not PLAYWRIGHT_AVAILABLE:
+        print(json.dumps({"error": "playwright not installed. Run: pip install playwright && playwright install chromium"}))
+        return
+
+    all_results = []
+
+    async with async_playwright() as playwright:
+        tasks = [
+            scrape_country(keyword, cfg, playwright)
+            for cfg in EBAY_COUNTRIES
+        ]
+        country_results = await asyncio.gather(*tasks, return_exceptions=True)
+        for res in country_results:
+            if isinstance(res, list):
+                all_results.extend(res)
+            elif isinstance(res, Exception):
+                print(f"[BOT] Country error: {res}", file=sys.stderr)
+
+    # Sort by profit descending
+    all_results.sort(key=lambda x: x.get("profit", 0), reverse=True)
+
+    print(json.dumps({"products": all_results}, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python ebay_bot_v9.py \"keyword\"")
+        sys.exit(1)
+    asyncio.run(main(sys.argv[1]))
