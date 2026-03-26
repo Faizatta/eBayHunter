@@ -177,7 +177,6 @@
               <th>Ali ★</th>
               <th>Reviews</th>
               <th>Shipping</th>
-              <th>Why Good?</th>
               <th>Links</th>
             </tr>
           </thead>
@@ -199,7 +198,6 @@
                   <span class="flex items-center gap-1.5 text-sm text-zinc-400 whitespace-nowrap">
                     <span>{{ flagFor(p.country) }}</span>{{ p.country }}
                   </span>
-                  <!-- local shipping badge -->
                   <span v-if="p.localShipping"
                     class="text-xs text-emerald-400 font-display flex items-center gap-1">
                     <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -304,23 +302,16 @@
                 <span v-else class="text-zinc-500 text-xs">Paid</span>
               </td>
 
-              <!-- Why good product -->
-              <td class="max-w-[220px]">
-                <p class="text-xs text-zinc-500 leading-relaxed line-clamp-3">
-                  {{ p.whyGoodProduct || '—' }}
-                </p>
-              </td>
-
-              <!-- Links -->
+              <!-- Links — handles both camelCase and PascalCase from API -->
               <td>
                 <div class="flex flex-col gap-1.5">
-                  <a :href="p.ebayUrl" target="_blank" rel="noopener noreferrer"
+                  <a :href="p.ebayUrl || p.EbayUrl || '#'" target="_blank" rel="noopener noreferrer"
                     class="text-xs bg-zinc-800 hover:bg-brand-500/20 hover:text-brand-400 border border-zinc-700 hover:border-brand-500/30 text-zinc-300 px-2.5 py-1 rounded-lg transition-all font-display text-center">
-                    eBay
+                    eBay ↗
                   </a>
-                  <a :href="p.aliexpressUrl" target="_blank" rel="noopener noreferrer"
+                  <a :href="p.aliexpressUrl || p.AliexpressUrl || '#'" target="_blank" rel="noopener noreferrer"
                     class="text-xs bg-zinc-800 hover:bg-orange-500/20 hover:text-orange-400 border border-zinc-700 hover:border-orange-500/30 text-zinc-300 px-2.5 py-1 rounded-lg transition-all font-display text-center">
-                    Ali
+                    Ali ↗
                   </a>
                 </div>
               </td>
@@ -389,7 +380,7 @@ const countries = [
 const countryFlags = Object.fromEntries(countries.map(c => [c.name, c.flag]))
 function flagFor(name) { return countryFlags[name] ?? '🌐' }
 
-// ── Currency symbol helper (fixes hardcoded $ bug) ─────────────────────────
+// ── Currency symbol helper ─────────────────────────────────────────────────
 function currencySymbol(currency) {
   const map = { GBP: '£', EUR: '€', AUD: 'A$', USD: '$' }
   return map[currency] ?? currency + ' '
@@ -402,7 +393,7 @@ function marginPct(p) {
     : 0
 }
 
-// ── Weekly bars: parse "10 / 12 / 11 / 9" → [10,12,11,9] ─────────────────
+// ── Weekly bars ────────────────────────────────────────────────────────────
 function parseWeeks(str) {
   if (!str) return []
   return str.split('/').map(s => parseInt(s.trim()) || 0)
@@ -451,11 +442,9 @@ const resultCountries = computed(() =>
 const sortedResults = computed(() => {
   let r = [...results.value]
 
-  // Filters
   if (filterCountry.value) r = r.filter(p => p.country === filterCountry.value)
   if (filterComp.value)    r = r.filter(p => p.competitionLevel === filterComp.value)
 
-  // Sort — uses correct v7 field names
   if (sortBy.value === 'profit')     r.sort((a, b) => b.profit - a.profit)
   if (sortBy.value === 'price')      r.sort((a, b) => a.ebayLowestPrice - b.ebayLowestPrice)
   if (sortBy.value === 'sold')       r.sort((a, b) => (b.soldPerWeek ?? 0) - (a.soldPerWeek ?? 0))
@@ -483,10 +472,10 @@ function stopCountryAnimation() {
 // ── Run search ─────────────────────────────────────────────────────────────
 async function runSearch() {
   if (!keyword.value.trim()) return
-  loading.value     = true
-  searchError.value = ''
-  results.value     = []
-  searched.value    = false
+  loading.value       = true
+  searchError.value   = ''
+  results.value       = []
+  searched.value      = false
   filterCountry.value = ''
   filterComp.value    = ''
 
@@ -509,7 +498,7 @@ async function runSearch() {
   }
 }
 
-// ── CSV / Excel export — all v7 fields ────────────────────────────────────
+// ── CSV export ─────────────────────────────────────────────────────────────
 function exportExcel() {
   const data = sortedResults.value
   if (!data.length) return
@@ -523,7 +512,6 @@ function exportExcel() {
     'Competition', 'Active Listings',
     'Free Shipping', 'Local Shipping', 'Delivery Days',
     'eBay URL', 'AliExpress URL',
-    'Why Good Product',
   ]
 
   const escape = v => {
@@ -544,7 +532,7 @@ function exportExcel() {
     p.aliReviews ?? '',
     p.profit.toFixed(2),
     marginPct(p) + '%',
-    p.soldPerWeek ?? '',          // ✅ fixed: was soldLastWeek
+    p.soldPerWeek ?? '',
     p.totalSoldMonth ?? '',
     p.weeklyConsistency ?? '',
     p.competitionLevel ?? '',
@@ -552,9 +540,8 @@ function exportExcel() {
     p.freeShipping ? 'Yes' : 'No',
     p.localShipping ? 'Yes' : 'No',
     p.deliveryDays ?? '',
-    p.ebayUrl,
-    p.aliexpressUrl,
-    p.whyGoodProduct ?? '',
+    p.ebayUrl || p.EbayUrl || '',
+    p.aliexpressUrl || p.AliexpressUrl || '',
   ].map(escape).join(','))
 
   const csv  = [headers.join(','), ...rows].join('\n')
