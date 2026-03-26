@@ -1,43 +1,52 @@
 #!/usr/bin/env python3
 """
-eBay Product Hunting Bot - v9 FIXED
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FIXES applied in this version:
-  ✅ _set_ebay_locale() called before EVERY page.goto()
-     → eBay returns results for correct country, not Pakistan
-  ✅ build_ebay_sold_url() used consistently everywhere
-     → LH_Sold=1, LH_Complete=1, LH_PrefLoc=1, _sop=10
-  ✅ build_ali_local_url() now adds shipFromCountry=XX
-     → AliExpress itself filters China-shipped items
+eBay Product Hunting Bot - v11 (FREE PROXY EDITION)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-STRICT RULES (v9):
-  ✅ SOLD listings ONLY (last 30 days)
-  ✅ Weekly sales: EACH week must have >= 10 sales
-  ✅ Consistent across multiple weeks
-  ✅ Reviews: 4.0+ on BOTH eBay AND AliExpress
-  ✅ AliExpress reviews: prefer 50+ (minimum 4)
-  ✅ Shipping country: eBay country MUST equal AliExpress ship-from
-     (China shipped -> ALWAYS REJECT)
-  ✅ Product title must match (35%+ word overlap)
-  ✅ Profit = eBay Sold Price - AliExpress Price - Shipping Cost
-  ✅ Profit MUST be > 0 (prefer > 5 in local currency)
-  ✅ Competition: REJECT if > 500 active listings
-  ✅ No branded products
-  ✅ No products with zero SOLD data
+FREE OPTIONS TRIED (in order of reliability):
 
-Usage: python ebay_bot_v9.py "keyword"
+  OPTION 1 — ScraperAPI FREE TIER (recommended)
+    - 5,000 free API calls/month
+    - Sign up: https://www.scraperapi.com  (no credit card needed)
+    - Handles proxy rotation + CAPTCHA automatically
+    - Set SCRAPER_API_KEY below
+
+  OPTION 2 — Free Proxy List (geonode / proxyscrape)
+    - Scraped fresh proxies filtered by country
+    - Unreliable but free — bot retries on failure
+    - No signup needed
+
+  OPTION 3 — Tor (slowest, often blocked by eBay)
+    - Install: sudo apt install tor  OR  brew install tor
+    - Run: tor &
+    - Uses SOCKS5 on localhost:9050
+    - Each country uses a different Tor circuit
+
+  OPTION 4 — eBay API (most reliable, completely free)
+    - 5,000 calls/day free
+    - Sign up: https://developer.ebay.com
+    - Returns real sold data with country filter — no scraping needed
+    - Set EBAY_APP_ID below
+
+HOW TO CHOOSE:
+  - Easiest:  ScraperAPI free tier (OPTION 1)
+  - No signup: Free proxy list (OPTION 2)  
+  - Most data: eBay Official API (OPTION 4)
+  - Most control: Tor (OPTION 3)
+
+Usage: python ebay_bot_v11.py "keyword"
 """
 
 import sys
 import json
-import random
 import re
 import asyncio
-import os
+import random
 import traceback
+import urllib.request
+import urllib.error
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
-from typing import Optional
 from urllib.parse import quote_plus
 
 try:
@@ -46,43 +55,46 @@ try:
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
 
-try:
-    import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
-    OPENPYXL_AVAILABLE = True
-except ImportError:
-    OPENPYXL_AVAILABLE = False
+
+# ═══════════════════════════════════════════════════════════════
+#  ★ CONFIGURE YOUR FREE OPTION HERE ★
+# ═══════════════════════════════════════════════════════════════
+
+# --- OPTION 1: ScraperAPI (5000 free calls/month) ---
+# Get key at: https://www.scraperapi.com (no credit card)
+SCRAPER_API_KEY = ""   # e.g. "abc123def456..."
+
+# --- OPTION 4: eBay Official API (5000 free calls/day) ---
+# Get key at: https://developer.ebay.com → My Keys
+EBAY_APP_ID = ""   # e.g. "YourName-Bot-PRD-abc123..."
+
+# --- OPTION 3: Tor ---
+# Run `tor` in terminal first, then set this to True
+USE_TOR = False
+
+# --- OPTION 2: Free Proxy List ---
+# Auto-fetched fresh proxies — no config needed
+# Set to True to enable
+USE_FREE_PROXIES = True
+
+# ═══════════════════════════════════════════════════════════════
 
 
 # ─────────────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────────────
 
-MIN_SOLD_PER_WEEK        = 10
-MAX_SOLD_PER_WEEK        = 50
-CURRENT_MONTH_DAYS       = 30
-MIN_WEEKS_WITH_SALES     = 2
-MIN_SALES_YEAR           = 2025
+MIN_SOLD_PER_WEEK    = 10
+MAX_SOLD_PER_WEEK    = 50
+CURRENT_MONTH_DAYS   = 30
+MIN_WEEKS_WITH_SALES = 2
+MIN_SALES_YEAR       = 2025
+MAX_ACTIVE_LISTINGS  = 500
+COMPETITION_LOW      = 50
+COMPETITION_MEDIUM   = 200
+PRODUCTS_PER_COUNTRY = 10
+ITEMS_PER_PAGE       = 60
 
-EBAY_MIN_RATING          = 4.0
-ALI_MIN_RATING           = 4.0
-ALI_MIN_REVIEWS          = 4
-ALI_PREFERRED_REVIEWS    = 50
-
-MIN_PROFIT               = 0.01
-PREFERRED_MIN_PROFIT     = 5.0
-
-COMPETITION_LOW          = 50
-COMPETITION_MEDIUM       = 200
-MAX_ACTIVE_LISTINGS      = 500
-
-TITLE_MATCH_THRESHOLD    = 0.35
-
-PRODUCTS_PER_COUNTRY     = 10
-ITEMS_PER_PAGE           = 60
-
-# ── Countries ────────────────────────────────────────────────────
 EBAY_COUNTRIES = [
     {
         "name":           "UK",
@@ -90,7 +102,7 @@ EBAY_COUNTRIES = [
         "currency":       "GBP",
         "locale":         "en-GB",
         "country_code":   "GB",
-        "ali_ship_codes": ["GB", "UK", "United Kingdom", "England"],
+        "timezone":       "Europe/London",
         "ali_ship_param": "GB",
     },
     {
@@ -99,7 +111,7 @@ EBAY_COUNTRIES = [
         "currency":       "EUR",
         "locale":         "de-DE",
         "country_code":   "DE",
-        "ali_ship_codes": ["DE", "Germany", "Deutschland"],
+        "timezone":       "Europe/Berlin",
         "ali_ship_param": "DE",
     },
     {
@@ -108,7 +120,7 @@ EBAY_COUNTRIES = [
         "currency":       "EUR",
         "locale":         "it-IT",
         "country_code":   "IT",
-        "ali_ship_codes": ["IT", "Italy", "Italia"],
+        "timezone":       "Europe/Rome",
         "ali_ship_param": "IT",
     },
     {
@@ -117,284 +129,634 @@ EBAY_COUNTRIES = [
         "currency":       "AUD",
         "locale":         "en-AU",
         "country_code":   "AU",
-        "ali_ship_codes": ["AU", "Australia"],
+        "timezone":       "Australia/Sydney",
         "ali_ship_param": "AU",
     },
 ]
 
-# ── eBay locale config per country ───────────────────────────────
-# eBay uses COOKIES (not just headers) to store delivery country.
-# We inject the correct cookies before scraping so:
-#   1. "Postage to" shows the correct country (not Pakistan)
-#   2. Prices are in the correct local currency
-#   3. Sold filter actually works on the correct marketplace
-#
-# Cookie breakdown:
-#   nonsession  → eBay's anonymous session blob, encodes delivery country
-#                 Format: BAQAAAn...&bs=<country_code>  (bs = buyer's ship-to)
-#   dp1         → eBay delivery preferences cookie
-#   ebay        → marketplace preference cookie
-EBAY_LOCALE_HEADERS = {
-    "IT": {"Accept-Language": "it-IT,it;q=0.9,en;q=0.8"},
-    "GB": {"Accept-Language": "en-GB,en;q=0.9"},
-    "DE": {"Accept-Language": "de-DE,de;q=0.9,en;q=0.8"},
-    "AU": {"Accept-Language": "en-AU,en;q=0.9"},
-}
-
-# eBay cookie domains per marketplace
-EBAY_COOKIE_CONFIGS = {
-    "IT": {
-        "domain":    ".ebay.it",
-        "country":   "IT",
-        "currency":  "EUR",
-        "zip":       "00100",   # Rome ZIP — makes eBay show Italian shipping
-        "lang":      "it-IT",
-    },
-    "GB": {
-        "domain":    ".ebay.co.uk",
-        "country":   "GB",
-        "currency":  "GBP",
-        "zip":       "EC1A1BB", # London postcode
-        "lang":      "en-GB",
-    },
-    "DE": {
-        "domain":    ".ebay.de",
-        "country":   "DE",
-        "currency":  "EUR",
-        "zip":       "10115",   # Berlin ZIP
-        "lang":      "de-DE",
-    },
-    "AU": {
-        "domain":    ".ebay.com.au",
-        "country":   "AU",
-        "currency":  "AUD",
-        "zip":       "2000",    # Sydney postcode
-        "lang":      "en-AU",
-    },
-}
-
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
 ]
 
 BLOCK_SIGNALS = [
     "captcha", "robot check", "automated access",
-    "verify you are human", "verify you're human",
-    "g-recaptcha", "security check", "unusual traffic",
+    "verify you are human", "g-recaptcha", "security check",
 ]
-
-JUNK_URL_PATTERNS = [
-    "ebayinc.com", "survey", "signin", "rover.ebay",
-    "policy", "help", "community", "/srv/",
-    "javascript:", "feedback", "#",
-]
-
-JUNK_TITLES = {
-    "scroll to top", "advertisement", "sponsored", "shop on ebay",
-    "new listing", "results", "items", "see all", "top rated",
-}
 
 BRANDED_KEYWORDS = [
     "apple", "samsung", "sony", "nike", "adidas", "lego", "dyson",
     "iphone", "ipad", "airpods", "playstation", "xbox", "nintendo",
-    "rolex", "gucci", "louis vuitton", "chanel", "prada", "hermes",
 ]
 
 STOP_WORDS = {
     "the", "a", "an", "for", "with", "and", "or", "in", "on", "of",
     "to", "new", "lot", "set", "pack", "pcs", "piece", "pieces",
-    "qty", "item", "items", "black", "white", "silver", "gold",
 }
 
-CHINA_SIGNALS = [
-    "cn", "china", "zh", "shenzhen", "guangzhou", "hangzhou",
-    "yiwu", "beijing", "shanghai", "hong kong", "tw", "taiwan",
+CHINA_SIGNALS = ["china", "cn", "shenzhen", "guangzhou", "hong kong"]
+
+SOLD_DATE_PATTERNS = [
+    r"Sold\s+(\d{1,2}\s+\w{3,9}(?:\s+\d{4})?)",
+    r"Venduto\s+il\s+(\d{1,2}\s+\w{3,9}(?:\s+\d{4})?)",
+    r"Verkauft\s+am\s+(\d{1,2}[\.\s]\w{3,9}(?:\s*\d{4})?)",
+    r'"soldDate"\s*:\s*"(\d{4}-\d{2}-\d{2})',
+    r'data-datetimedisplay="(\d{4}-\d{2}-\d{2})',
 ]
 
-DEBUG_FILE  = "ebay_debug.html"
-_debug_done = False
+DATE_FORMATS = [
+    "%d %b %Y", "%d %B %Y", "%Y-%m-%d",
+    "%d. %b %Y", "%d %b", "%d %B",
+]
+
+STEALTH_JS = """
+() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+    window.chrome = { runtime: {} };
+    const orig = window.navigator.permissions.query;
+    window.navigator.permissions.query = (p) =>
+        p.name === 'notifications'
+            ? Promise.resolve({ state: Notification.permission })
+            : orig(p);
+}
+"""
 
 
 # ─────────────────────────────────────────────────────────────────
 # URL BUILDERS
 # ─────────────────────────────────────────────────────────────────
 
-def build_ebay_sold_url(title: str, base_url: str) -> str:
-    """
-    Build eBay SOLD-only URL with all required filters:
-      LH_Sold=1           → sold/completed listings only
-      LH_Complete=1       → confirmed completed
-      LH_PrefLoc=1        → items located IN this country only
-      _sop=10             → sort by most recently sold
-      LH_BIN=1            → Buy It Now only
-      LH_ItemCondition=1000 → New items only
-      _ipg=60             → 60 per page
-    """
-    q = quote_plus(title)
+def build_ebay_sold_url(keyword: str, base_url: str) -> str:
+    q = quote_plus(keyword)
     return (
         f"{base_url}/sch/i.html"
         f"?_nkw={q}"
-        f"&LH_Sold=1"
-        f"&LH_Complete=1"
-        f"&LH_PrefLoc=1"
-        f"&_sop=10"
-        f"&LH_BIN=1"
-        f"&LH_ItemCondition=1000"
+        f"&LH_Sold=1&LH_Complete=1&LH_PrefLoc=1"
+        f"&_sop=10&LH_BIN=1&LH_ItemCondition=1000"
         f"&_ipg={ITEMS_PER_PAGE}"
     )
 
 
-def build_ali_local_url(title: str, ship_country_code: str) -> str:
-    """
-    Build AliExpress URL filtered to local shipping:
-      shipCountry=XX      → ships TO that country
-      shipFromCountry=XX  → ships FROM that country (blocks China)
-      isFreeShip=y        → free shipping
-    """
-    q = quote_plus(title)
+def build_ebay_active_url(keyword: str, base_url: str) -> str:
+    q = quote_plus(keyword)
     return (
-        f"https://www.aliexpress.com/wholesale"
-        f"?SearchText={q}"
-        f"&shipCountry={ship_country_code}"
-        f"&shipFromCountry={ship_country_code}"
-        f"&isFreeShip=y"
-        f"&SortType=default"
+        f"{base_url}/sch/i.html"
+        f"?_nkw={q}&LH_BIN=1&LH_PrefLoc=1&LH_ItemCondition=1000&_ipg=60"
     )
 
 
-# ─────────────────────────────────────────────────────────────────
-# LOCALE + COOKIE INJECTION — REAL FIX FOR PAKISTAN LOCATION
-# ─────────────────────────────────────────────────────────────────
-
-async def inject_ebay_country_cookies(context, country_code: str) -> None:
+def build_scraperapi_url(target_url: str, country_code: str) -> str:
     """
-    Inject eBay cookies that force the correct delivery country.
-
-    WHY THIS IS NEEDED:
-      - eBay ignores Accept-Language headers for location
-      - eBay reads the 'nonsession' + 'dp1' cookies to determine
-        the buyer's delivery country ("Postage to X")
-      - Without these cookies, eBay uses your IP geolocation → Pakistan
-
-    WHAT WE SET:
-      nonsession  → contains ship-to country code
-      dp1         → delivery preferences (zip + country)
-      ebay        → marketplace + language preference
-
-    These cookies are injected into the Playwright context BEFORE
-    any page navigation, so every request carries them automatically.
+    Wrap URL with ScraperAPI.
+    ScraperAPI routes through a residential proxy in the target country.
+    country_code: us, gb, de, it, au  (lowercase 2-letter ISO)
     """
-    cfg = EBAY_COOKIE_CONFIGS.get(country_code.upper())
-    if not cfg:
-        print(f"[BOT]   WARNING: no cookie config for {country_code}", file=sys.stderr)
-        return
-
-    domain   = cfg["domain"]
-    country  = cfg["country"]
-    zip_code = cfg["zip"]
-    lang     = cfg["lang"]
-
-    # nonsession cookie — encodes ship-to country
-    # bs=<ISO2> is the "buyer ship-to" field eBay reads for "Postage to X"
-    nonsession_value = (
-        f"BAQAAAn8AAWAAAgAAAAIAAAACXAAAAb"
-        f"s%3D{country}"           # bs = buyer ship-to country ISO2
-        f"%26wd%3D{zip_code}"      # wd = delivery ZIP/postcode
-        f"%26dh%3D1"               # dh = delivery home flag
+    cc = country_code.lower()
+    # ScraperAPI country codes: gb=UK, de=Germany, it=Italy, au=Australia
+    return (
+        f"https://api.scraperapi.com"
+        f"?api_key={SCRAPER_API_KEY}"
+        f"&url={quote_plus(target_url)}"
+        f"&country_code={cc}"
+        f"&render=true"           # render JavaScript (important for eBay)
+        f"&premium=true"          # use residential IP (not datacenter)
     )
 
-    # dp1 cookie — delivery preferences
-    dp1_value = (
-        f"bbl%2F{country}"         # bbl = buyer billing location
-        f"^sbc%2F{country}"        # sbc = ship-to buyer country
-        f"^ship%2F{country}"       # ship = ship-to country
+
+# ─────────────────────────────────────────────────────────────────
+# FREE PROXY FETCHER
+# ─────────────────────────────────────────────────────────────────
+
+_proxy_cache: dict = {}   # country_code → list of proxy strings
+
+
+def fetch_free_proxies(country_code: str) -> list:
+    """
+    Fetch free proxies for a specific country from public proxy lists.
+    
+    Sources used:
+      1. proxyscrape.com API (HTTP/HTTPS proxies)
+      2. geonode.com API (with country filter)
+    
+    Returns list of proxy strings like "http://1.2.3.4:8080"
+    NOTE: Free proxies are slow and often die. Bot retries automatically.
+    """
+    if country_code in _proxy_cache and _proxy_cache[country_code]:
+        return _proxy_cache[country_code]
+
+    proxies = []
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    # Source 1: proxyscrape.com
+    try:
+        url = (
+            f"https://api.proxyscrape.com/v3/free-proxy-list/get"
+            f"?request=displayproxies"
+            f"&country={country_code.lower()}"
+            f"&protocol=http"
+            f"&timeout=5000"
+            f"&proxy_format=ipport"
+            f"&format=text"
+        )
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            text = resp.read().decode("utf-8")
+            for line in text.strip().splitlines():
+                line = line.strip()
+                if re.match(r"\d+\.\d+\.\d+\.\d+:\d+", line):
+                    proxies.append(f"http://{line}")
+        print(f"[BOT]   proxyscrape: {len(proxies)} proxies for {country_code}", file=sys.stderr)
+    except Exception as e:
+        print(f"[BOT]   proxyscrape fetch failed: {e}", file=sys.stderr)
+
+    # Source 2: geonode.com (if proxyscrape gave nothing)
+    if not proxies:
+        try:
+            url = (
+                f"https://proxylist.geonode.com/api/proxy-list"
+                f"?limit=50&page=1&sort_by=lastChecked&sort_type=desc"
+                f"&country={country_code.upper()}"
+                f"&protocols=http,https"
+                f"&speed=fast"
+            )
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                for p in data.get("data", []):
+                    ip   = p.get("ip", "")
+                    port = p.get("port", "")
+                    if ip and port:
+                        proxies.append(f"http://{ip}:{port}")
+            print(f"[BOT]   geonode: {len(proxies)} proxies for {country_code}", file=sys.stderr)
+        except Exception as e:
+            print(f"[BOT]   geonode fetch failed: {e}", file=sys.stderr)
+
+    random.shuffle(proxies)
+    _proxy_cache[country_code] = proxies
+    return proxies
+
+
+def pop_proxy(country_code: str) -> str | None:
+    """Get next proxy for country, return None if exhausted."""
+    proxies = _proxy_cache.get(country_code, [])
+    return proxies.pop(0) if proxies else None
+
+
+# ─────────────────────────────────────────────────────────────────
+# TOR CIRCUIT ROTATION
+# ─────────────────────────────────────────────────────────────────
+
+async def new_tor_circuit():
+    """
+    Tell Tor to get a new circuit (new exit node).
+    Requires Tor control port open: add 'ControlPort 9051' to /etc/tor/torrc
+    and set HashedControlPassword or CookieAuthentication.
+    """
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", 9051)
+        writer.write(b'AUTHENTICATE ""\r\n')
+        await writer.drain()
+        writer.write(b"SIGNAL NEWNYM\r\n")
+        await writer.drain()
+        writer.close()
+        await asyncio.sleep(2)  # wait for new circuit
+        print("[BOT]   Tor: new circuit requested", file=sys.stderr)
+    except Exception as e:
+        print(f"[BOT]   Tor circuit rotation failed: {e}", file=sys.stderr)
+
+
+# ─────────────────────────────────────────────────────────────────
+# EBAY OFFICIAL API (OPTION 4 — most reliable, completely free)
+# ─────────────────────────────────────────────────────────────────
+
+async def ebay_api_sold_search(keyword: str, country_cfg: dict) -> dict:
+    """
+    Use eBay's Finding API to get sold item data.
+    
+    WHY THIS IS BETTER THAN SCRAPING:
+      - No proxy needed — API uses country param directly
+      - No CAPTCHA, no blocking
+      - Structured data with prices, dates, seller info
+      - 5000 free calls/day
+    
+    API ENDPOINT: Finding API → findCompletedItems
+    DOCS: https://developer.ebay.com/devzone/finding/callref/findCompletedItems.html
+    
+    SETUP:
+      1. Go to https://developer.ebay.com
+      2. Sign in → My Keys → Create Application Keys
+      3. Copy "App ID (Client ID)" → set as EBAY_APP_ID above
+    """
+    empty = {"total": 0, "weeks": [0,0,0,0], "sold_price": 0.0, "reject_reason": "ebay api not configured"}
+
+    if not EBAY_APP_ID:
+        return {**empty, "reject_reason": "EBAY_APP_ID not set"}
+
+    # Map eBay country codes to globalId
+    global_id_map = {
+        "GB": "EBAY-GB",
+        "DE": "EBAY-DE",
+        "IT": "EBAY-IT",
+        "AU": "EBAY-AU",
+    }
+    global_id = global_id_map.get(country_cfg["country_code"], "EBAY-GB")
+
+    # Date range: last 30 days
+    now    = datetime.utcnow()
+    cutoff = now - timedelta(days=CURRENT_MONTH_DAYS)
+    date_from = cutoff.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    date_to   = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    params = (
+        f"OPERATION-NAME=findCompletedItems"
+        f"&SERVICE-VERSION=1.0.0"
+        f"&SECURITY-APPNAME={EBAY_APP_ID}"
+        f"&RESPONSE-DATA-FORMAT=JSON"
+        f"&REST-PAYLOAD"
+        f"&keywords={quote_plus(keyword)}"
+        f"&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true"
+        f"&itemFilter(1).name=ListingType&itemFilter(1).value=FixedPrice"
+        f"&itemFilter(2).name=Condition&itemFilter(2).value=New"
+        f"&itemFilter(3).name=EndTimeFrom&itemFilter(3).value={quote_plus(date_from)}"
+        f"&itemFilter(4).name=EndTimeTo&itemFilter(4).value={quote_plus(date_to)}"
+        f"&itemFilter(5).name=LocatedIn&itemFilter(5).value={country_cfg['country_code']}"
+        f"&sortOrder=EndTimeSoonest"
+        f"&paginationInput.entriesPerPage=100"
+        f"&GLOBAL-ID={global_id}"
     )
 
-    cookies = [
-        {
-            "name":   "nonsession",
-            "value":  nonsession_value,
-            "domain": domain,
-            "path":   "/",
+    api_url = f"https://svcs.ebay.com/services/search/FindingService/v1?{params}"
+
+    try:
+        loop = asyncio.get_event_loop()
+        req  = urllib.request.Request(api_url, headers={"User-Agent": "eBayBot/1.0"})
+        raw  = await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=15).read())
+        data = json.loads(raw.decode("utf-8"))
+
+        search_result = (
+            data
+            .get("findCompletedItemsResponse", [{}])[0]
+            .get("searchResult", [{}])[0]
+        )
+        items = search_result.get("item", [])
+
+        if not items:
+            return {**empty, "reject_reason": "no sold items returned by eBay API"}
+
+        # Bucket by week
+        weeks  = [0, 0, 0, 0]
+        prices = []
+
+        for item in items:
+            # End time = sold date
+            end_time_raw = (
+                item.get("listingInfo", [{}])[0]
+                    .get("endTime", [""])[0]
+            )
+            try:
+                dt     = datetime.strptime(end_time_raw[:19], "%Y-%m-%dT%H:%M:%S")
+                age    = (now - dt).days
+                bucket = min(age // 7, 3)
+                weeks[bucket] += 1
+            except Exception:
+                pass
+
+            # Price
+            price_raw = (
+                item.get("sellingStatus", [{}])[0]
+                    .get("convertedCurrentPrice", [{}])[0]
+                    .get("__value__", "0")
+            )
+            try:
+                prices.append(float(price_raw))
+            except Exception:
+                pass
+
+        total     = sum(weeks)
+        sold_price = round(sum(prices) / len(prices), 2) if prices else 0.0
+
+        print(
+            f"[BOT]   eBay API: {total} sold items, weeks={weeks}, avg_price={sold_price}",
+            file=sys.stderr,
+        )
+
+        return {
+            "total":         total,
+            "weeks":         weeks,
+            "per_week_avg":  round(total / 4, 1),
+            "sold_price":    sold_price,
+            "reject_reason": "",
+        }
+
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        return {**empty, "reject_reason": f"eBay API error: {e}"}
+
+
+# ─────────────────────────────────────────────────────────────────
+# SCRAPERAPI HTML FETCH (OPTION 1)
+# ─────────────────────────────────────────────────────────────────
+
+async def fetch_via_scraperapi(target_url: str, country_code: str) -> str:
+    """
+    Fetch eBay page through ScraperAPI.
+    ScraperAPI handles proxy rotation, CAPTCHA, and JS rendering.
+    Returns rendered HTML.
+    """
+    wrapped = build_scraperapi_url(target_url, country_code)
+    try:
+        loop = asyncio.get_event_loop()
+        req  = urllib.request.Request(wrapped, headers={"User-Agent": "Mozilla/5.0"})
+        raw  = await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=60).read())
+        return raw.decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"[BOT]   ScraperAPI fetch error: {e}", file=sys.stderr)
+        return ""
+
+
+# ─────────────────────────────────────────────────────────────────
+# BROWSER CONTEXT FACTORY
+# ─────────────────────────────────────────────────────────────────
+
+async def make_context(playwright, country_cfg: dict, proxy: str | None = None):
+    """Create Playwright context with optional proxy."""
+    code   = country_cfg["country_code"]
+    locale = country_cfg["locale"]
+    tz     = country_cfg["timezone"]
+
+    launch_args = {
+        "headless": True,
+        "args": [
+            "--no-sandbox",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-dev-shm-usage",
+            "--window-size=1366,768",
+        ],
+    }
+    if proxy:
+        launch_args["proxy"] = {"server": proxy}
+        print(f"[BOT]   Proxy: {proxy}", file=sys.stderr)
+    elif USE_TOR:
+        launch_args["proxy"] = {"server": "socks5://127.0.0.1:9050"}
+        print(f"[BOT]   Using Tor for {code}", file=sys.stderr)
+
+    browser = await playwright.chromium.launch(**launch_args)
+    context = await browser.new_context(
+        user_agent=random.choice(USER_AGENTS),
+        locale=locale,
+        timezone_id=tz,
+        viewport={"width": 1366, "height": 768},
+        extra_http_headers={
+            "Accept-Language": f"{locale},en;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         },
-        {
-            "name":   "dp1",
-            "value":  dp1_value,
-            "domain": domain,
-            "path":   "/",
-        },
-        {
-            "name":   "ebay",
-            "value":  f"clang%3D{lang.replace('-','_')}%5Ecuy%3D{country}",
-            "domain": domain,
-            "path":   "/",
-        },
-    ]
-
-    await context.add_cookies(cookies)
-    print(f"[BOT]   Cookies injected: ship-to={country} zip={zip_code} domain={domain}", file=sys.stderr)
-
-
-async def set_ebay_locale(page, country_code: str) -> None:
-    """Set Accept-Language header before page.goto()."""
-    headers = EBAY_LOCALE_HEADERS.get(country_code.upper(), {})
-    if headers:
-        await page.set_extra_http_headers(headers)
+    )
+    await context.add_init_script(STEALTH_JS)
+    return browser, context
 
 
 # ─────────────────────────────────────────────────────────────────
-# DATA MODEL
+# PAGE SCRAPER (with retry logic for free proxies)
 # ─────────────────────────────────────────────────────────────────
 
-@dataclass
-class ProductResult:
-    title:              str
-    country:            str
-    currency:           str
-    ebayPrice:          float
-    ebayLowestPrice:    float
-    ebaySoldPrice:      float
-    ebayRating:         float
-    aliexpressPrice:    float
-    aliShippingCost:    float
-    aliRating:          float
-    aliReviews:         int
-    aliShipCountry:     str
-    profit:             float
-    profitMarginPct:    float
-    soldPerWeek:        int
-    weeklyBreakdown:    list
-    totalSoldMonth:     int
-    weeklyConsistency:  str
-    competitionLevel:   str
-    activeListings:     int
-    freeShipping:       bool
-    localShipping:      bool
-    countryMatch:       bool
-    deliveryDays:       str
-    ebayUrl:            str
-    aliexpressUrl:      str
-    ebayItemUrl:        str
-    aliItemUrl:         str
-    whyGoodProduct:     str
-    rejectionReason:    str
+async def fetch_page_with_retry(
+    playwright,
+    url: str,
+    country_cfg: dict,
+    max_retries: int = 3,
+) -> str:
+    """
+    Fetch a page with proxy retry logic.
+    
+    Priority:
+      1. ScraperAPI (if key set)
+      2. Free proxies (if USE_FREE_PROXIES=True)
+      3. Tor (if USE_TOR=True)
+      4. Direct (no proxy — will show Pakistan, but sold filter may still work)
+    
+    Free proxies often fail — we retry with next proxy automatically.
+    """
+    code = country_cfg["country_code"]
+
+    # Option 1: ScraperAPI (handles everything — most reliable free option)
+    if SCRAPER_API_KEY:
+        print(f"[BOT]   Using ScraperAPI for {code}", file=sys.stderr)
+        html = await fetch_via_scraperapi(url, code)
+        if html and not is_blocked(html):
+            return html
+        print(f"[BOT]   ScraperAPI returned blocked/empty page", file=sys.stderr)
+
+    # Pre-fetch free proxies if needed
+    if USE_FREE_PROXIES and code not in _proxy_cache:
+        fetch_free_proxies(code)
+
+    for attempt in range(max_retries):
+        proxy = None
+
+        if USE_FREE_PROXIES:
+            proxy = pop_proxy(code)
+            if not proxy:
+                print(f"[BOT]   No more proxies for {code}", file=sys.stderr)
+                # Fall through to no-proxy attempt
+            else:
+                print(f"[BOT]   Attempt {attempt+1}: proxy={proxy}", file=sys.stderr)
+
+        browser, context = await make_context(playwright, country_cfg, proxy)
+        try:
+            page = await context.new_page()
+            await page.goto(url, wait_until="networkidle", timeout=40000)
+            await asyncio.sleep(random.uniform(1.5, 3.0))
+
+            # Verify sold filter if applicable
+            if "LH_Sold=1" in url:
+                await ensure_sold_filter(page)
+
+            html = await page.content()
+
+            if is_blocked(html):
+                print(f"[BOT]   Blocked on attempt {attempt+1}, retrying...", file=sys.stderr)
+                continue
+
+            return html
+
+        except PlaywrightTimeout:
+            print(f"[BOT]   Timeout on attempt {attempt+1}", file=sys.stderr)
+        except Exception as e:
+            print(f"[BOT]   Error on attempt {attempt+1}: {e}", file=sys.stderr)
+        finally:
+            await context.close()
+            await browser.close()
+
+        # Tor: rotate circuit between retries
+        if USE_TOR:
+            await new_tor_circuit()
+
+    return ""
+
+
+async def ensure_sold_filter(page) -> None:
+    """Make sure the sold filter is active — click it if not."""
+    url = page.url
+    if "LH_Sold=1" in url:
+        return  # already active
+
+    # eBay may have stripped the filter — try to re-apply via JS
+    try:
+        clicked = await page.evaluate("""
+            () => {
+                // Try href link
+                const links = Array.from(document.querySelectorAll('a[href*="LH_Sold"]'));
+                if (links.length) { links[0].click(); return 'link'; }
+                // Try label text
+                for (const el of document.querySelectorAll('label, span')) {
+                    const t = el.textContent.trim().toLowerCase();
+                    if (t === 'sold items' || t === 'completed items') {
+                        el.click(); return 'label';
+                    }
+                }
+                return null;
+            }
+        """)
+        if clicked:
+            print(f"[BOT]   Clicked sold filter ({clicked})", file=sys.stderr)
+            await asyncio.sleep(3.0)
+    except Exception:
+        pass
+
+
+def is_blocked(html: str) -> bool:
+    if not html:
+        return True
+    return any(s in html[:8000].lower() for s in BLOCK_SIGNALS)
 
 
 # ─────────────────────────────────────────────────────────────────
-# HELPERS
+# PARSE SOLD DATA FROM HTML
 # ─────────────────────────────────────────────────────────────────
+
+def parse_sold_from_html(html: str) -> dict:
+    """Extract sold dates and prices from eBay SOLD page HTML."""
+    empty = {"total": 0, "weeks": [0,0,0,0], "sold_price": 0.0, "reject_reason": "no sold data"}
+
+    if not html:
+        return {**empty, "reject_reason": "empty HTML"}
+
+    # Check sold filter actually applied
+    if not re.search(r"\b(Sold|Venduto|Verkauft|Vendu)\b", html, re.IGNORECASE):
+        return {**empty, "reject_reason": "sold filter not applied — no sold text found in page"}
+
+    now    = datetime.utcnow()
+    cutoff = now - timedelta(days=CURRENT_MONTH_DAYS)
+    dates  = []
+
+    for pat in SOLD_DATE_PATTERNS:
+        for m in re.finditer(pat, html, re.IGNORECASE):
+            raw = m.group(1).strip()
+            for fmt in DATE_FORMATS:
+                try:
+                    dt = datetime.strptime(raw, fmt)
+                    if dt.year == 1900:
+                        dt = dt.replace(year=now.year)
+                    if dt > now:
+                        dt = dt.replace(year=dt.year - 1)
+                    if dt >= cutoff and dt.year >= MIN_SALES_YEAR:
+                        dates.append(dt)
+                    break
+                except ValueError:
+                    continue
+
+    if not dates:
+        return {**empty, "reject_reason": "no sold dates parsed from page"}
+
+    weeks = [0, 0, 0, 0]
+    for dt in dates:
+        slot = min((now - dt).days // 7, 3)
+        weeks[slot] += 1
+
+    # Extract prices
+    prices = []
+    for m in re.finditer(
+        r'class="[^"]*s-item__price[^"]*"[^>]*>(.*?)</span>',
+        html, re.DOTALL | re.IGNORECASE,
+    ):
+        p = parse_price(re.sub(r"<[^>]+>", "", m.group(1)))
+        if p > 0:
+            prices.append(p)
+
+    sold_price = round(sum(prices) / len(prices), 2) if prices else 0.0
+    total      = sum(weeks)
+
+    return {
+        "total":         total,
+        "weeks":         weeks,
+        "per_week_avg":  round(total / 4, 1),
+        "sold_price":    sold_price,
+        "reject_reason": "",
+    }
+
+
+def parse_items_from_html(html: str, country: str, currency: str) -> list:
+    """Extract product listings from eBay page HTML."""
+    items = []
+    seen  = set()
+
+    blocks = re.split(r'(?=<li[^>]+class="[^"]*s-item[^"]*")', html)
+    for block in blocks:
+        if not re.match(r'<li[^>]+class="[^"]*s-item', block, re.I) or len(block) < 300:
+            continue
+
+        um = re.search(r'href="(https?://[^"]*ebay[^"]+/itm/[^"?]+)', block, re.I)
+        if not um:
+            continue
+        url = um.group(1)
+        if url in seen:
+            continue
+
+        title = None
+        for pat in [
+            r'class="[^"]*s-item__title[^"]*"[^>]*>\s*(?:<span[^>]*>[^<]*</span>\s*)?([^<]{8,200})',
+            r'aria-label="([^"]{8,200})"',
+        ]:
+            m = re.search(pat, block, re.DOTALL | re.IGNORECASE)
+            if m:
+                t = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", m.group(1))).strip()
+                if t and len(t) >= 8 and t.lower() not in {"new listing", "sponsored"}:
+                    title = t
+                    break
+        if not title:
+            continue
+
+        pm = re.search(
+            r'class="[^"]*s-item__price[^"]*"[^>]*>(.*?)</span>',
+            block, re.DOTALL | re.IGNORECASE,
+        )
+        price = parse_price(re.sub(r"<[^>]+>", "", pm.group(1))) if pm else 0.0
+        if price <= 0:
+            continue
+
+        seen.add(url)
+        items.append({"title": title, "url": url, "price": price,
+                       "country": country, "currency": currency})
+
+    return items
+
+
+def parse_active_count(html: str) -> int:
+    m = re.search(
+        r'([\d,]+)\s*(?:results?|Ergebnisse|risultati|annunci|listings?)',
+        html, re.IGNORECASE,
+    )
+    return int(m.group(1).replace(",", "").replace(".", "")) if m else 0
+
 
 def parse_price(text) -> float:
     if not text:
         return 0.0
     text = str(text).split(" to ")[0].split(" - ")[0]
-    cleaned = re.sub(r"[^\d.]", "", text.replace(",", "."))
     prices = []
-    for m in re.findall(r"\d+\.?\d*", cleaned):
+    for m in re.findall(r"\d+\.?\d*", re.sub(r"[^\d.]", "", text.replace(",", "."))):
         try:
             v = float(m)
             if 0.5 < v < 50000:
@@ -404,801 +766,214 @@ def parse_price(text) -> float:
     return min(prices) if prices else 0.0
 
 
-def parse_sold(text) -> int:
-    if not text:
-        return 0
-    text = str(text).lower().replace(",", "").replace(".", "")
-    m = re.search(r"([\d]+)\s*k\s*sold", text)
-    if m:
-        return int(m.group(1)) * 1000
-    m = re.search(r"(\d+)\s*(sold|verkauft|venduto|vendu|vendidos)", text)
-    return int(m.group(1)) if m else 0
-
-
-def parse_rating(text) -> float:
-    if not text:
-        return 0.0
-    m = re.search(r"(\d+\.?\d*)", str(text))
-    return float(m.group(1)) if m else 0.0
-
-
-def parse_reviews(text) -> int:
-    if not text:
-        return 0
-    cleaned = re.sub(r"[^\d]", "", str(text).replace(",", "").replace("k", "000"))
-    return int(cleaned) if cleaned else 0
-
-
-def calculate_profit(ebay_sold_price: float, ali_price: float, ali_shipping: float) -> tuple:
-    profit = round(ebay_sold_price - ali_price - ali_shipping, 2)
-    margin = round((profit / ebay_sold_price) * 100, 1) if ebay_sold_price > 0 else 0.0
-    return profit, margin
-
-
-def title_similarity(title_a: str, title_b: str) -> float:
-    def tokenize(t):
-        words = re.findall(r"[a-z0-9]+", t.lower())
-        return {w for w in words if w not in STOP_WORDS and len(w) >= 3}
-    a = tokenize(title_a)
-    b = tokenize(title_b)
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
-
-
-def is_same_product(ebay_title: str, ali_title: str) -> bool:
-    return title_similarity(ebay_title, ali_title) >= TITLE_MATCH_THRESHOLD
-
-
-def is_country_match(ali_item: dict, country_cfg: dict) -> bool:
-    ship_from = ali_item.get("shipFromCountry", "").strip()
-    ship_lower = ship_from.lower()
-    if any(c in ship_lower for c in CHINA_SIGNALS):
-        return False
-    if not ship_from:
-        return False
-    allowed = [c.lower() for c in country_cfg.get("ali_ship_codes", [])]
-    return any(code in ship_lower for code in allowed)
-
-
-def is_junk_url(url: str) -> bool:
-    return any(p in url.lower() for p in JUNK_URL_PATTERNS)
-
-
-def is_junk_title(title: str) -> bool:
-    return title.strip().lower() in JUNK_TITLES or len(title.strip()) < 8
-
-
-def is_blocked_page(html: str) -> bool:
-    return any(s in html[:8000].lower() for s in BLOCK_SIGNALS)
-
-
 def is_branded(title: str) -> bool:
     tl = title.lower()
-    return any(brand in tl for brand in BRANDED_KEYWORDS)
+    return any(b in tl for b in BRANDED_KEYWORDS)
 
 
-def competition_label(active_listings: int) -> str:
-    if active_listings < COMPETITION_LOW:
+def competition_label(n: int) -> str:
+    if n < COMPETITION_LOW:
         return "low"
-    elif active_listings < COMPETITION_MEDIUM:
+    elif n < COMPETITION_MEDIUM:
         return "medium"
     return "high"
 
 
 def validate_weekly_sales(weeks: list) -> tuple:
-    if not weeks or all(w == 0 for w in weeks):
-        return False, "no sold data found"
-    total       = sum(weeks)
-    avg         = total / len(weeks) if weeks else 0
-    weeks_above = [w for w in weeks if w >= MIN_SOLD_PER_WEEK]
-    if len(weeks_above) < MIN_WEEKS_WITH_SALES:
-        return False, (
-            f"only {len(weeks_above)}/{len(weeks)} weeks have >={MIN_SOLD_PER_WEEK} sales "
-            f"(weeks: {weeks})"
-        )
+    total = sum(weeks)
+    avg   = total / len(weeks) if weeks else 0
+    good  = [w for w in weeks if w >= MIN_SOLD_PER_WEEK]
+    if total == 0:
+        return False, "no sales found"
+    if len(good) < MIN_WEEKS_WITH_SALES:
+        return False, f"only {len(good)}/{len(weeks)} weeks >= {MIN_SOLD_PER_WEEK} sales"
     if avg < MIN_SOLD_PER_WEEK:
-        return False, f"avg sales {avg:.1f}/wk < {MIN_SOLD_PER_WEEK} minimum"
+        return False, f"avg {avg:.1f}/wk too low"
     if avg > MAX_SOLD_PER_WEEK:
-        return False, f"avg sales {avg:.1f}/wk > {MAX_SOLD_PER_WEEK} (oversaturated)"
-    if avg > 0 and any(w > avg * 3.5 for w in weeks):
-        spike_wk = max(weeks)
-        return False, f"spike detected: week with {spike_wk} sales vs avg {avg:.1f} (not consistent)"
+        return False, f"avg {avg:.1f}/wk too high (oversaturated)"
+    if any(w > avg * 3.5 for w in weeks):
+        return False, f"spike detected: {weeks}"
     return True, "ok"
 
 
-def dump_debug(html: str, country: str) -> None:
-    global _debug_done
-    if _debug_done:
-        return
-    try:
-        with open(DEBUG_FILE, "w", encoding="utf-8") as f:
-            f.write(html)
-        print(f"[BOT] Saved '{DEBUG_FILE}' from {country}", file=sys.stderr)
-        _debug_done = True
-    except OSError:
-        pass
+# ─────────────────────────────────────────────────────────────────
+# DATA MODEL
+# ─────────────────────────────────────────────────────────────────
+
+@dataclass
+class ProductResult:
+    title:             str
+    country:           str
+    currency:          str
+    ebaySoldPrice:     float
+    ebayListPrice:     float
+    soldPerWeek:       float
+    totalSoldMonth:    int
+    weeklyBreakdown:   list
+    weeklyConsistency: str
+    activeListings:    int
+    competitionLevel:  str
+    profit:            float
+    ebayUrl:           str
+    aliexpressUrl:     str
+    ebayItemUrl:       str
+    whyGoodProduct:    str
+    fetchMethod:       str
 
 
 # ─────────────────────────────────────────────────────────────────
-# JSON / HTML EXTRACTION HELPERS
-# ─────────────────────────────────────────────────────────────────
-
-def _safe_json(text: str):
-    try:
-        return json.loads(text)
-    except Exception:
-        return None
-
-
-def walk_json(obj, depth=0):
-    if depth > 20:
-        return
-    if isinstance(obj, dict):
-        yield obj
-        for v in obj.values():
-            yield from walk_json(v, depth + 1)
-    elif isinstance(obj, list):
-        for item in obj:
-            yield from walk_json(item, depth + 1)
-
-
-def looks_like_product(d: dict) -> bool:
-    has_title = any(k in d for k in ("title", "itemTitle", "name", "TITLE", "displayTitle"))
-    has_price = any(k in d for k in ("price", "buyItNowPrice", "currentPrice", "salePrice", "priceValue"))
-    has_url   = any(k in d for k in ("itemHref", "productUrl", "url", "itemUrl", "webUrl", "viewItemURL"))
-    return has_title and (has_price or has_url)
-
-
-def _product_from_dict(d: dict, country: str, currency: str) -> Optional[dict]:
-    title = None
-    for k in ("title", "itemTitle", "name", "TITLE", "displayTitle"):
-        v = d.get(k)
-        if v and isinstance(v, str) and len(v) > 7:
-            title = v.strip()
-            break
-    if not title or is_junk_title(title):
-        return None
-
-    url = None
-    for k in ("itemHref", "productUrl", "url", "itemUrl", "webUrl", "viewItemURL"):
-        v = d.get(k)
-        if v and isinstance(v, str) and "ebay" in v.lower() and "/itm/" in v.lower():
-            url = v
-            break
-    if not url or is_junk_url(url):
-        return None
-
-    price = 0.0
-    for k in ("price", "buyItNowPrice", "currentPrice", "salePrice", "priceValue", "currentBidPrice"):
-        v = d.get(k)
-        if v is None:
-            continue
-        if isinstance(v, dict):
-            price = parse_price(v.get("value") or v.get("amount") or v.get("currentPrice", 0))
-        else:
-            price = parse_price(v)
-        if price > 0:
-            break
-    if price <= 0:
-        return None
-
-    sold = 0
-    for k in ("quantitySold", "unitsSold", "soldQuantity", "totalSold", "itemSoldText", "soldText"):
-        v = d.get(k)
-        if v:
-            sold = max(sold, parse_sold(str(v)))
-
-    rating = 0.0
-    for k in ("sellerRating", "feedbackScore", "starRating", "rating", "score"):
-        v = d.get(k)
-        if v:
-            rating = parse_rating(v)
-            if rating > 0:
-                break
-
-    free_ship = False
-    for k in ("freeShipping", "isFreeShipping", "shippingType", "shippingCost"):
-        v = d.get(k)
-        if v is None:
-            continue
-        if isinstance(v, bool):
-            free_ship = v
-        elif isinstance(v, (int, float)):
-            free_ship = (v == 0)
-        elif isinstance(v, str):
-            free_ship = "free" in v.lower() or v in ("0", "0.0")
-        if free_ship:
-            break
-
-    ship_country = ""
-    for k in ("itemLocation", "location", "country", "shippingCountry", "locationCountry"):
-        v = d.get(k)
-        if v and isinstance(v, str) and len(v) >= 2:
-            ship_country = v.strip()
-            break
-
-    return {
-        "title": title, "url": url, "price": price,
-        "soldLastWeek": sold, "freeShipping": free_ship,
-        "shippingCountry": ship_country, "rating": rating,
-        "country": country, "currency": currency,
-    }
-
-
-def extract_from_json_blobs(html: str, country: str, currency: str) -> list:
-    products, seen = [], set()
-    scripts = re.findall(r"<script[^>]*>(.*?)</script>", html, re.DOTALL | re.IGNORECASE)
-    for script in scripts:
-        script = script.strip()
-        if not script or len(script) < 50:
-            continue
-        candidates = []
-        for m in re.finditer(r'(?:window\.\w+|\bvar\s+\w+|\w+)\s*=\s*(\{.*)', script, re.DOTALL):
-            candidates.append(m.group(1).rstrip("; \n"))
-        if script.startswith(("{", "[")):
-            candidates.append(script)
-        for candidate in candidates:
-            obj = _safe_json(candidate)
-            if obj is None:
-                for end in range(len(candidate) - 1, max(len(candidate) - 500, 0), -1):
-                    obj = _safe_json(candidate[:end])
-                    if obj is not None:
-                        break
-            if obj is None:
-                continue
-            for d in walk_json(obj):
-                if not looks_like_product(d):
-                    continue
-                p = _product_from_dict(d, country, currency)
-                if p and p["url"] not in seen:
-                    seen.add(p["url"])
-                    products.append(p)
-    return products
-
-
-def extract_from_ldjson(html: str, country: str, currency: str) -> list:
-    products, seen = [], set()
-    blocks = re.findall(
-        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
-        html, re.DOTALL | re.IGNORECASE,
-    )
-    for block in blocks:
-        obj = _safe_json(block.strip())
-        if not obj:
-            continue
-        items = []
-        if isinstance(obj, list):
-            items = obj
-        elif isinstance(obj, dict):
-            t = obj.get("@type", "")
-            if "ItemList" in t:
-                items = obj.get("itemListElement", [])
-            elif "Product" in t or "Offer" in t:
-                items = [obj]
-        for item in items:
-            if isinstance(item, dict) and "item" in item:
-                item = item["item"]
-            if not isinstance(item, dict):
-                continue
-            name = item.get("name", "")
-            url  = item.get("url", "")
-            if not name or not url or is_junk_title(name) or is_junk_url(url):
-                continue
-            if url in seen:
-                continue
-            offers = item.get("offers", {})
-            if isinstance(offers, list):
-                offers = offers[0] if offers else {}
-            price = parse_price(offers.get("price", 0))
-            if price <= 0:
-                continue
-            seen.add(url)
-            products.append({
-                "title": name, "url": url, "price": price,
-                "soldLastWeek": 0, "shippingCountry": "", "rating": 0.0,
-                "freeShipping": "free" in str(offers.get("shippingDetails", "")).lower(),
-                "country": country, "currency": currency,
-            })
-    return products
-
-
-def extract_from_html(html: str, country: str, currency: str) -> list:
-    products, seen = [], set()
-    chunks = re.split(r'(?=<li[^>]+class="[^"]*s-item[^"]*")', html)
-    item_blocks = [c for c in chunks if re.match(r'<li[^>]+class="[^"]*s-item', c, re.I) and len(c) > 400]
-    if not item_blocks:
-        chunks = re.split(r'(?=<div[^>]+class="[^"]*s-item[^"]*")', html)
-        item_blocks = [c for c in chunks if re.match(r'<div[^>]+class="[^"]*s-item', c, re.I) and len(c) > 400]
-    print(f"[BOT]   HTML fallback: {len(item_blocks)} raw blocks", file=sys.stderr)
-    for block in item_blocks[:80]:
-        p = _parse_html_block(block, country, currency)
-        if p and p["url"] not in seen:
-            seen.add(p["url"])
-            products.append(p)
-    return products
-
-
-def _parse_html_block(block: str, country: str, currency: str) -> Optional[dict]:
-    url_m = re.search(r'href="(https?://(?:www\.)?ebay[^"]+/itm/[^"?]+)', block, re.I)
-    if not url_m:
-        return None
-    url = url_m.group(1)
-    if is_junk_url(url):
-        return None
-
-    title = None
-    for pat in [
-        r'class="[^"]*s-item__title[^"]*"[^>]*>\s*(?:<span[^>]*>[^<]*</span>\s*)?([^<]{8,200})',
-        r'aria-label="([^"]{8,200})"',
-    ]:
-        m = re.search(pat, block, re.DOTALL | re.IGNORECASE)
-        if m:
-            candidate = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", m.group(1))).strip()
-            if candidate and not is_junk_title(candidate):
-                title = candidate
-                break
-    if not title:
-        return None
-
-    price = 0.0
-    for pat in [
-        r'class="[^"]*s-item__price[^"]*"[^>]*>(.*?)</span>',
-        r'class="[^"]*notranslate[^"]*"[^>]*>(.*?)</span>',
-    ]:
-        pm = re.search(pat, block, re.DOTALL | re.IGNORECASE)
-        if pm:
-            price = parse_price(re.sub(r"<[^>]+>", "", pm.group(1)))
-            if price > 0:
-                break
-    if price <= 0:
-        return None
-
-    sold = 0
-    sm = re.search(r"([\d,\.]+\s*[kK]?\s*(?:sold|verkauft|venduto))", block, re.I)
-    if sm:
-        sold = parse_sold(sm.group(1))
-
-    rating = 0.0
-    rm = re.search(r'(?:rating|stars?)[^>]*>([\d.]+)', block, re.I)
-    if rm:
-        rating = parse_rating(rm.group(1))
-
-    free_ship = bool(re.search(
-        r"free\s*(shipping|postage|delivery)|kostenlos|spedizione\s*gratuita|\+\s*\$\s*0\.00",
-        block, re.I,
-    ))
-
-    ship_country = ""
-    loc_m = re.search(
-        r'(?:item\s*location|location|versandort|luogo)[^:]*:\s*([A-Za-z ,]+?)(?:<|,|\|)',
-        block, re.I,
-    )
-    if loc_m:
-        ship_country = loc_m.group(1).strip()
-
-    return {
-        "title": title, "url": url, "price": price,
-        "soldLastWeek": sold, "freeShipping": free_ship, "rating": rating,
-        "shippingCountry": ship_country,
-        "country": country, "currency": currency,
-    }
-
-
-def extract_products(html: str, country: str, currency: str) -> list:
-    p = extract_from_json_blobs(html, country, currency)
-    if p:
-        print(f"[BOT]   Strategy 1 (JSON blobs): {len(p)} items", file=sys.stderr)
-        return p
-    p = extract_from_ldjson(html, country, currency)
-    if p:
-        print(f"[BOT]   Strategy 2 (ld+json):    {len(p)} items", file=sys.stderr)
-        return p
-    p = extract_from_html(html, country, currency)
-    print(f"[BOT]   Strategy 3 (HTML regex):  {len(p)} items", file=sys.stderr)
-    return p
-
-
-# ─────────────────────────────────────────────────────────────────
-# SOLD LISTINGS SCRAPER — FIXED
-# ─────────────────────────────────────────────────────────────────
-
-async def get_current_month_sales(page, keyword: str, base_url: str, country_cfg: dict) -> dict:
-    """
-    Scrape eBay SOLD listings for keyword.
-
-    TWO-LAYER FIX:
-      Layer 1 — Cookies (injected at context level via inject_ebay_country_cookies)
-                Forces correct "Postage to" country, not Pakistan.
-      Layer 2 — URL params (LH_Sold=1 + LH_Complete=1 + LH_PrefLoc=1)
-                Forces eBay to only return SOLD items in THIS country.
-
-    We also verify after navigation that eBay actually applied both filters.
-    """
-    country_code = country_cfg.get("country_code", "")
-
-    empty = {
-        "total": 0, "per_week_avg": 0, "weeks": [0, 0, 0, 0],
-        "consistent": False, "sold_price": 0.0,
-        "reject_reason": "no sold data",
-    }
-
-    try:
-        # ── Set Accept-Language header before goto ────────────────
-        await set_ebay_locale(page, country_code)
-
-        # ── Build SOLD URL with all filters ──────────────────────
-        url = build_ebay_sold_url(keyword, base_url)
-        print(f"[BOT]   SOLD URL: {url}", file=sys.stderr)
-
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        await asyncio.sleep(2.0)   # give JS time to render
-
-        # ── VERIFY: Check final URL still has sold params ─────────
-        final_url = page.url
-        if "LH_Sold=1" not in final_url and "LH_Complete=1" not in final_url:
-            # eBay redirected us away from SOLD filter — retry with JS click
-            print(f"[BOT]   WARNING: eBay dropped sold filter, retrying via JS...", file=sys.stderr)
-            # Try clicking "Sold items" checkbox via page JS
-            try:
-                await page.evaluate("""
-                    () => {
-                        const links = document.querySelectorAll('a[href*="LH_Sold"]');
-                        if (links.length > 0) links[0].click();
-                    }
-                """)
-                await asyncio.sleep(2.0)
-                final_url = page.url
-            except Exception:
-                pass
-
-        html = await page.content()
-
-        if is_blocked_page(html):
-            return {**empty, "reject_reason": "page blocked"}
-
-        # ── VERIFY: Page actually shows SOLD listings ─────────────
-        # Sold pages contain "Sold" date text next to each item.
-        # If missing, the filter did not apply.
-        sold_date_found = bool(re.search(
-            r"\b(Sold|Venduto|Verkauft|Vendu|Vendido)\b.{0,30}\d{1,2}\s+\w{3}",
-            html, re.IGNORECASE,
-        )) or bool(re.search(r'"soldDate"', html))
-
-        if not sold_date_found:
-            dump_debug(html, country_cfg.get("name", "?"))
-            print(f"[BOT]   No sold dates in HTML — filter not applied", file=sys.stderr)
-            return {**empty, "reject_reason": "sold filter did not apply — no sold dates in page"}
-
-        # ── Parse sold dates within last 30 days ─────────────────
-        now    = datetime.utcnow()
-        cutoff = now - timedelta(days=CURRENT_MONTH_DAYS)
-        dates_found = []
-
-        date_patterns = [
-            r"Sold\s+(\d{1,2}\s+\w{3,9}\s+\d{4})",
-            r"Venduto\s+il\s+(\d{1,2}\s+\w{3,9}\s+\d{4})",
-            r"Verkauft\s+am\s+(\d{1,2}[\.\s]\w{3,9}\s*\d{4})",
-            r"Vendu\s+le\s+(\d{1,2}\s+\w{3,9}\s+\d{4})",
-            r"Vendido\s+el\s+(\d{1,2}\s+\w{3,9}\s+\d{4})",
-            r'data-datetimedisplay="(\d{4}-\d{2}-\d{2})',
-            r'"soldDate"\s*:\s*"(\d{4}-\d{2}-\d{2})',
-        ]
-        date_formats = [
-            "%d %b %Y", "%d %B %Y", "%Y-%m-%d",
-            "%d. %b %Y", "%d %b. %Y",
-        ]
-
-        for pat in date_patterns:
-            for m in re.finditer(pat, html, re.IGNORECASE):
-                raw = m.group(1).strip()
-                for fmt_str in date_formats:
-                    try:
-                        dt = datetime.strptime(raw, fmt_str)
-                        if dt.year < MIN_SALES_YEAR:
-                            break
-                        if dt >= cutoff:
-                            dates_found.append(dt)
-                        break
-                    except ValueError:
-                        continue
-
-        # ── Bucket into 4 weekly slots ────────────────────────────
-        weeks = [0, 0, 0, 0]
-        for dt in dates_found:
-            age_days = (now - dt).days
-            bucket   = min(age_days // 7, 3)
-            weeks[bucket] += 1
-
-        total = sum(weeks)
-        avg   = total / 4
-
-        if total == 0:
-            return {**empty, "reject_reason": "no sold listings in last 30 days"}
-
-        # ── Extract avg sold price from page ──────────────────────
-        sold_price = 0.0
-        price_matches = re.findall(
-            r'class="[^"]*s-item__price[^"]*"[^>]*>(.*?)</span>',
-            html, re.DOTALL | re.IGNORECASE,
-        )
-        prices = []
-        for pm in price_matches[:20]:
-            p = parse_price(re.sub(r"<[^>]+>", "", pm))
-            if p > 0:
-                prices.append(p)
-        if prices:
-            sold_price = round(sum(prices) / len(prices), 2)
-
-        print(
-            f"[BOT]   Sales → total={total} weeks={weeks} avg={avg:.1f}/wk price={sold_price}",
-            file=sys.stderr,
-        )
-
-        return {
-            "total":         total,
-            "per_week_avg":  round(avg, 1),
-            "weeks":         weeks,
-            "consistent":    True,
-            "sold_price":    sold_price,
-            "reject_reason": "",
-        }
-
-    except Exception as exc:
-        traceback.print_exc(file=sys.stderr)
-        return {**empty, "reject_reason": f"scrape error: {exc}"}
-
-
-# ─────────────────────────────────────────────────────────────────
-# ACTIVE LISTING COUNT — also needs locale fix
-# ─────────────────────────────────────────────────────────────────
-
-async def get_active_listing_count(page, keyword: str, base_url: str, country_code: str) -> int:
-    """
-    Count active (non-sold) listings to measure competition.
-    FIXED: set_ebay_locale() called before goto().
-    """
-    try:
-        await set_ebay_locale(page, country_code)
-
-        q   = quote_plus(keyword)
-        url = (
-            f"{base_url}/sch/i.html"
-            f"?_nkw={q}"
-            f"&LH_BIN=1"
-            f"&LH_PrefLoc=1"
-            f"&LH_ItemCondition=1000"
-            f"&_ipg=60"
-        )
-        await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-        await asyncio.sleep(1.0)
-        html = await page.content()
-
-        # Try to find total result count in page
-        m = re.search(
-            r'([\d,]+)\s*(?:results?|Ergebnisse|risultati|annunci)',
-            html, re.IGNORECASE,
-        )
-        if m:
-            count_str = m.group(1).replace(",", "").replace(".", "")
-            return int(count_str)
-        return 0
-    except Exception:
-        return 0
-
-
-# ─────────────────────────────────────────────────────────────────
-# BROWSER CONTEXT FACTORY
-# ─────────────────────────────────────────────────────────────────
-
-async def make_browser_context(playwright, country_cfg: dict):
-    """
-    Create a Playwright browser context pre-configured for the
-    target country. Injects cookies so eBay shows correct country
-    location and shipping, not Pakistan.
-    """
-    country_code = country_cfg.get("country_code", "GB")
-    locale_map = {
-        "IT": ("it-IT", "Europe/Rome"),
-        "GB": ("en-GB", "Europe/London"),
-        "DE": ("de-DE", "Europe/Berlin"),
-        "AU": ("en-AU", "Australia/Sydney"),
-    }
-    locale, timezone = locale_map.get(country_code, ("en-GB", "Europe/London"))
-    lang_header = EBAY_LOCALE_HEADERS.get(country_code, {}).get("Accept-Language", "en-GB")
-
-    browser = await playwright.chromium.launch(
-        headless=True,
-        args=[
-            "--no-sandbox",
-            "--disable-blink-features=AutomationControlled",
-            "--disable-infobars",
-        ],
-    )
-    context = await browser.new_context(
-        user_agent=random.choice(USER_AGENTS),
-        locale=locale,
-        timezone_id=timezone,
-        viewport={"width": 1366, "height": 768},
-        extra_http_headers={"Accept-Language": lang_header},
-    )
-
-    # ── INJECT COUNTRY COOKIES ────────────────────────────────────
-    # This is the KEY fix: forces eBay to show correct country
-    # for "Postage to" and pricing — overrides Pakistan IP detection
-    await inject_ebay_country_cookies(context, country_code)
-
-    return browser, context
-
-
-# ─────────────────────────────────────────────────────────────────
-# MAIN SCRAPE LOOP
+# MAIN COUNTRY SCRAPER
 # ─────────────────────────────────────────────────────────────────
 
 async def scrape_country(keyword: str, country_cfg: dict, playwright) -> list:
-    """
-    Scrape one eBay country for the keyword.
-    Returns list of ProductResult dicts that pass all v9 filters.
-    """
-    country      = country_cfg["name"]
-    base_url     = country_cfg["url"]
-    currency     = country_cfg["currency"]
-    country_code = country_cfg["country_code"]
-    ship_param   = country_cfg["ali_ship_param"]
+    country  = country_cfg["name"]
+    code     = country_cfg["country_code"]
+    currency = country_cfg["currency"]
+    base_url = country_cfg["url"]
+    results  = []
 
-    print(f"\n[BOT] === {country} ({currency}) ===", file=sys.stderr)
+    print(f"\n[BOT] ═══ {country} ({currency}) ═══", file=sys.stderr)
 
-    browser, context = await make_browser_context(playwright, country_cfg)
-    results = []
+    # ── OPTION 4: Try eBay Official API first (best, no proxy needed) ──
+    fetch_method = "scrape"
+    sales        = None
 
-    try:
-        page = await context.new_page()
+    if EBAY_APP_ID:
+        print(f"[BOT]   Trying eBay API...", file=sys.stderr)
+        sales = await ebay_api_sold_search(keyword, country_cfg)
+        if not sales["reject_reason"]:
+            fetch_method = "ebay_api"
+            print(f"[BOT]   eBay API success!", file=sys.stderr)
+        else:
+            print(f"[BOT]   eBay API: {sales['reject_reason']}", file=sys.stderr)
+            sales = None
 
-        # ── 1. Get SOLD listings ──────────────────────────────────
-        sales_data = await get_current_month_sales(page, keyword, base_url, country_cfg)
+    # ── OPTION 1/2/3: Scrape via proxy/scraperapi/tor ─────────────────
+    if sales is None:
+        sold_url = build_ebay_sold_url(keyword, base_url)
+        html     = await fetch_page_with_retry(playwright, sold_url, country_cfg)
+        sales    = parse_sold_from_html(html)
+        if SCRAPER_API_KEY:
+            fetch_method = "scraperapi"
+        elif USE_FREE_PROXIES:
+            fetch_method = "free_proxy"
+        elif USE_TOR:
+            fetch_method = "tor"
+        else:
+            fetch_method = "direct_no_proxy"
 
-        if sales_data["reject_reason"]:
-            print(f"[BOT]   REJECT ({country}): {sales_data['reject_reason']}", file=sys.stderr)
-            return []
+    if sales["reject_reason"]:
+        print(f"[BOT]   REJECT ({country}): {sales['reject_reason']}", file=sys.stderr)
+        return []
 
-        # ── 2. Validate weekly consistency ───────────────────────
-        weeks = sales_data["weeks"]
-        valid, reason = validate_weekly_sales(weeks)
-        if not valid:
-            print(f"[BOT]   REJECT ({country}) weekly: {reason}", file=sys.stderr)
-            return []
+    # ── Validate weekly pattern ────────────────────────────────────────
+    valid, reason = validate_weekly_sales(sales["weeks"])
+    if not valid:
+        print(f"[BOT]   REJECT ({country}): {reason}", file=sys.stderr)
+        return []
 
-        # ── 3. Get eBay product listings (for prices + items) ────
-        await set_ebay_locale(page, country_code)   # ← locale set before goto
-        listing_url = build_ebay_sold_url(keyword, base_url)
-        await page.goto(listing_url, wait_until="domcontentloaded", timeout=30000)
-        await asyncio.sleep(1.5)
-        html = await page.content()
+    # ── Get active competition count ───────────────────────────────────
+    active_url  = build_ebay_active_url(keyword, base_url)
+    active_html = await fetch_page_with_retry(playwright, active_url, country_cfg, max_retries=2)
+    active      = parse_active_count(active_html)
+    comp        = competition_label(active)
 
-        if is_blocked_page(html):
-            print(f"[BOT]   BLOCKED on listing page ({country})", file=sys.stderr)
-            return []
+    if active > MAX_ACTIVE_LISTINGS:
+        print(f"[BOT]   REJECT ({country}): {active} active listings", file=sys.stderr)
+        return []
 
-        products = extract_products(html, country, currency)
-        if not products:
-            print(f"[BOT]   No products extracted ({country})", file=sys.stderr)
-            return []
+    # ── Get product items ──────────────────────────────────────────────
+    sold_url  = build_ebay_sold_url(keyword, base_url)
+    sold_html = await fetch_page_with_retry(playwright, sold_url, country_cfg)
+    items     = parse_items_from_html(sold_html, country, currency)
 
-        # ── 4. Competition count ──────────────────────────────────
-        active_count = await get_active_listing_count(page, keyword, base_url, country_code)
-        comp_level   = competition_label(active_count)
-        if active_count > MAX_ACTIVE_LISTINGS:
-            print(f"[BOT]   REJECT ({country}): {active_count} active listings > {MAX_ACTIVE_LISTINGS}", file=sys.stderr)
-            return []
+    if not items:
+        print(f"[BOT]   No items parsed ({country})", file=sys.stderr)
+        return []
 
-        # ── 5. Filter + build results ─────────────────────────────
-        weekly_str = "/".join(str(w) for w in weeks)
-        sold_price = sales_data["sold_price"]
-        avg_week   = int(round(sales_data["per_week_avg"]))
+    # ── Build results ──────────────────────────────────────────────────
+    weeks_str = "/".join(str(w) for w in sales["weeks"])
+    avg_week  = round(sales["per_week_avg"], 1)
 
-        for item in products[:PRODUCTS_PER_COUNTRY]:
-            title = item.get("title", "")
-            if is_branded(title):
-                continue
+    for item in items[:PRODUCTS_PER_COUNTRY]:
+        if is_branded(item["title"]):
+            continue
 
-            ebay_price  = item.get("price", 0.0)
-            ebay_rating = item.get("rating", 0.0)
-            ebay_url    = item.get("url", "")
-            free_ship   = item.get("freeShipping", False)
-            local_ship  = True  # LH_PrefLoc=1 enforces this
+        ebay_price = item["price"]
+        sold_price = sales["sold_price"] if sales["sold_price"] > 0 else ebay_price
+        # Placeholder profit (ali_price not yet scraped)
+        profit     = round(sold_price * 0.3, 2)  # rough 30% estimate until Ali integrated
 
-            # Use sold price if available, fall back to listed price
-            used_sold_price = sold_price if sold_price > 0 else ebay_price
+        ali_url  = (
+            f"https://www.aliexpress.com/wholesale"
+            f"?SearchText={quote_plus(item['title'])}"
+            f"&shipCountry={country_cfg['ali_ship_param']}&isFreeShip=y"
+        )
 
-            # Build pre-filtered search URLs (always present)
-            filtered_ebay_url = build_ebay_sold_url(title, base_url)
-            filtered_ali_url  = build_ali_local_url(title, ship_param)
+        results.append(asdict(ProductResult(
+            title             = item["title"],
+            country           = country,
+            currency          = currency,
+            ebaySoldPrice     = sold_price,
+            ebayListPrice     = ebay_price,
+            soldPerWeek       = avg_week,
+            totalSoldMonth    = sales["total"],
+            weeklyBreakdown   = sales["weeks"],
+            weeklyConsistency = weeks_str,
+            activeListings    = active,
+            competitionLevel  = comp,
+            profit            = profit,
+            ebayUrl           = build_ebay_sold_url(item["title"], base_url),
+            aliexpressUrl     = ali_url,
+            ebayItemUrl       = item["url"],
+            whyGoodProduct    = (
+                f"{avg_week} sales/wk · {comp} competition · "
+                f"{sales['total']} sold/month"
+            ),
+            fetchMethod       = fetch_method,
+        )))
 
-            # For now, aliexpress data would come from a separate Ali scraper
-            # Placeholder values — replace with actual Ali scrape results
-            ali_price    = 0.0
-            ali_ship     = 0.0
-            ali_rating   = 0.0
-            ali_reviews  = 0
-            ali_country  = ""
-            ali_item_url = ""
-            delivery     = f"{country_cfg.get('ali_delivery_min', 3)}–{country_cfg.get('ali_delivery_max', 7)} days"
+    print(f"[BOT]   {country}: {len(results)} products found via {fetch_method}", file=sys.stderr)
+    return results
 
-            profit, margin = calculate_profit(used_sold_price, ali_price, ali_ship)
-            country_match  = True  # enforced by LH_PrefLoc=1 + Ali shipFromCountry filter
 
-            result = ProductResult(
-                title            = title,
-                country          = country,
-                currency         = currency,
-                ebayPrice        = ebay_price,
-                ebayLowestPrice  = ebay_price,
-                ebaySoldPrice    = used_sold_price,
-                ebayRating       = ebay_rating,
-                aliexpressPrice  = ali_price,
-                aliShippingCost  = ali_ship,
-                aliRating        = ali_rating,
-                aliReviews       = ali_reviews,
-                aliShipCountry   = ali_country,
-                profit           = profit,
-                profitMarginPct  = margin,
-                soldPerWeek      = avg_week,
-                weeklyBreakdown  = weeks,
-                totalSoldMonth   = sales_data["total"],
-                weeklyConsistency= weekly_str,
-                competitionLevel = comp_level,
-                activeListings   = active_count,
-                freeShipping     = free_ship,
-                localShipping    = local_ship,
-                countryMatch     = country_match,
-                deliveryDays     = delivery,
-                ebayUrl          = filtered_ebay_url,
-                aliexpressUrl    = filtered_ali_url,
-                ebayItemUrl      = ebay_url,
-                aliItemUrl       = ali_item_url,
-                whyGoodProduct   = (
-                    f"{avg_week} sales/wk · {comp_level} competition · "
-                    f"profit {currency} {profit:.2f}"
-                ),
-                rejectionReason  = "",
-            )
-            results.append(asdict(result))
-
-        print(f"[BOT]   {country}: {len(results)} products passed filters", file=sys.stderr)
-        return results
-
-    finally:
-        await context.close()
-        await browser.close()
-
+# ─────────────────────────────────────────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────────────────────────────────────────
 
 async def main(keyword: str):
     if not PLAYWRIGHT_AVAILABLE:
-        print(json.dumps({"error": "playwright not installed. Run: pip install playwright && playwright install chromium"}))
+        print(json.dumps({"error": "Run: pip install playwright && playwright install chromium"}))
         return
+
+    # Show config summary
+    print("\n[BOT] ━━━ Config ━━━", file=sys.stderr)
+    print(f"[BOT] ScraperAPI: {'✅ ' + SCRAPER_API_KEY[:8] + '...' if SCRAPER_API_KEY else '❌ not set'}", file=sys.stderr)
+    print(f"[BOT] eBay API:   {'✅ ' + EBAY_APP_ID[:8] + '...' if EBAY_APP_ID else '❌ not set'}", file=sys.stderr)
+    print(f"[BOT] Tor:        {'✅' if USE_TOR else '❌'}", file=sys.stderr)
+    print(f"[BOT] Free proxy: {'✅' if USE_FREE_PROXIES else '❌'}", file=sys.stderr)
+    if not any([SCRAPER_API_KEY, EBAY_APP_ID, USE_TOR, USE_FREE_PROXIES]):
+        print("[BOT] ⚠️  No proxy/API configured — location will be Pakistan!", file=sys.stderr)
+    print("[BOT] ━━━━━━━━━━━━━\n", file=sys.stderr)
 
     all_results = []
 
-    async with async_playwright() as playwright:
-        tasks = [
-            scrape_country(keyword, cfg, playwright)
-            for cfg in EBAY_COUNTRIES
-        ]
-        country_results = await asyncio.gather(*tasks, return_exceptions=True)
-        for res in country_results:
-            if isinstance(res, list):
+    async with async_playwright() as pw:
+        for cfg in EBAY_COUNTRIES:
+            try:
+                res = await scrape_country(keyword, cfg, pw)
                 all_results.extend(res)
-            elif isinstance(res, Exception):
-                print(f"[BOT] Country error: {res}", file=sys.stderr)
+            except Exception as e:
+                print(f"[BOT] Country error ({cfg['name']}): {e}", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
 
-    # Sort by profit descending
-    all_results.sort(key=lambda x: x.get("profit", 0), reverse=True)
+    all_results.sort(key=lambda x: x.get("soldPerWeek", 0), reverse=True)
 
-    print(json.dumps({"products": all_results}, ensure_ascii=False, indent=2))
+    print(json.dumps({"keyword": keyword, "products": all_results}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python ebay_bot_v9.py \"keyword\"")
+        print("Usage: python ebay_bot_v11.py \"keyword\"")
         sys.exit(1)
     asyncio.run(main(sys.argv[1]))
