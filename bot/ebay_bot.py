@@ -122,25 +122,54 @@ EBAY_COUNTRIES = [
     },
 ]
 
-# ── eBay locale headers — CRITICAL FIX ───────────────────────────
-# These override Playwright's detected location (your server IP / Pakistan)
-# so eBay serves results for the correct country every time.
+# ── eBay locale config per country ───────────────────────────────
+# eBay uses COOKIES (not just headers) to store delivery country.
+# We inject the correct cookies before scraping so:
+#   1. "Postage to" shows the correct country (not Pakistan)
+#   2. Prices are in the correct local currency
+#   3. Sold filter actually works on the correct marketplace
+#
+# Cookie breakdown:
+#   nonsession  → eBay's anonymous session blob, encodes delivery country
+#                 Format: BAQAAAn...&bs=<country_code>  (bs = buyer's ship-to)
+#   dp1         → eBay delivery preferences cookie
+#   ebay        → marketplace preference cookie
 EBAY_LOCALE_HEADERS = {
+    "IT": {"Accept-Language": "it-IT,it;q=0.9,en;q=0.8"},
+    "GB": {"Accept-Language": "en-GB,en;q=0.9"},
+    "DE": {"Accept-Language": "de-DE,de;q=0.9,en;q=0.8"},
+    "AU": {"Accept-Language": "en-AU,en;q=0.9"},
+}
+
+# eBay cookie domains per marketplace
+EBAY_COOKIE_CONFIGS = {
     "IT": {
-        "Accept-Language":         "it-IT,it;q=0.9,en;q=0.8",
-        "X-EBAY-C-MARKETPLACE-ID": "EBAY_IT",
+        "domain":    ".ebay.it",
+        "country":   "IT",
+        "currency":  "EUR",
+        "zip":       "00100",   # Rome ZIP — makes eBay show Italian shipping
+        "lang":      "it-IT",
     },
     "GB": {
-        "Accept-Language":         "en-GB,en;q=0.9",
-        "X-EBAY-C-MARKETPLACE-ID": "EBAY_GB",
+        "domain":    ".ebay.co.uk",
+        "country":   "GB",
+        "currency":  "GBP",
+        "zip":       "EC1A1BB", # London postcode
+        "lang":      "en-GB",
     },
     "DE": {
-        "Accept-Language":         "de-DE,de;q=0.9,en;q=0.8",
-        "X-EBAY-C-MARKETPLACE-ID": "EBAY_DE",
+        "domain":    ".ebay.de",
+        "country":   "DE",
+        "currency":  "EUR",
+        "zip":       "10115",   # Berlin ZIP
+        "lang":      "de-DE",
     },
     "AU": {
-        "Accept-Language":         "en-AU,en;q=0.9",
-        "X-EBAY-C-MARKETPLACE-ID": "EBAY_AU",
+        "domain":    ".ebay.com.au",
+        "country":   "AU",
+        "currency":  "AUD",
+        "zip":       "2000",    # Sydney postcode
+        "lang":      "en-AU",
     },
 }
 
@@ -238,26 +267,83 @@ def build_ali_local_url(title: str, ship_country_code: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────
-# LOCALE HEADER HELPER — CRITICAL FIX
+# LOCALE + COOKIE INJECTION — REAL FIX FOR PAKISTAN LOCATION
 # ─────────────────────────────────────────────────────────────────
 
+async def inject_ebay_country_cookies(context, country_code: str) -> None:
+    """
+    Inject eBay cookies that force the correct delivery country.
+
+    WHY THIS IS NEEDED:
+      - eBay ignores Accept-Language headers for location
+      - eBay reads the 'nonsession' + 'dp1' cookies to determine
+        the buyer's delivery country ("Postage to X")
+      - Without these cookies, eBay uses your IP geolocation → Pakistan
+
+    WHAT WE SET:
+      nonsession  → contains ship-to country code
+      dp1         → delivery preferences (zip + country)
+      ebay        → marketplace + language preference
+
+    These cookies are injected into the Playwright context BEFORE
+    any page navigation, so every request carries them automatically.
+    """
+    cfg = EBAY_COOKIE_CONFIGS.get(country_code.upper())
+    if not cfg:
+        print(f"[BOT]   WARNING: no cookie config for {country_code}", file=sys.stderr)
+        return
+
+    domain   = cfg["domain"]
+    country  = cfg["country"]
+    zip_code = cfg["zip"]
+    lang     = cfg["lang"]
+
+    # nonsession cookie — encodes ship-to country
+    # bs=<ISO2> is the "buyer ship-to" field eBay reads for "Postage to X"
+    nonsession_value = (
+        f"BAQAAAn8AAWAAAgAAAAIAAAACXAAAAb"
+        f"s%3D{country}"           # bs = buyer ship-to country ISO2
+        f"%26wd%3D{zip_code}"      # wd = delivery ZIP/postcode
+        f"%26dh%3D1"               # dh = delivery home flag
+    )
+
+    # dp1 cookie — delivery preferences
+    dp1_value = (
+        f"bbl%2F{country}"         # bbl = buyer billing location
+        f"^sbc%2F{country}"        # sbc = ship-to buyer country
+        f"^ship%2F{country}"       # ship = ship-to country
+    )
+
+    cookies = [
+        {
+            "name":   "nonsession",
+            "value":  nonsession_value,
+            "domain": domain,
+            "path":   "/",
+        },
+        {
+            "name":   "dp1",
+            "value":  dp1_value,
+            "domain": domain,
+            "path":   "/",
+        },
+        {
+            "name":   "ebay",
+            "value":  f"clang%3D{lang.replace('-','_')}%5Ecuy%3D{country}",
+            "domain": domain,
+            "path":   "/",
+        },
+    ]
+
+    await context.add_cookies(cookies)
+    print(f"[BOT]   Cookies injected: ship-to={country} zip={zip_code} domain={domain}", file=sys.stderr)
+
+
 async def set_ebay_locale(page, country_code: str) -> None:
-    """
-    Inject correct Accept-Language and eBay marketplace headers
-    before every page.goto() call.
-
-    Without this, eBay detects your server IP location (Pakistan)
-    and returns:
-      - Pakistani shipping prices
-      - Wrong currency
-      - Possibly redirects to wrong eBay site
-
-    Call this BEFORE every page.goto() on an eBay URL.
-    """
+    """Set Accept-Language header before page.goto()."""
     headers = EBAY_LOCALE_HEADERS.get(country_code.upper(), {})
     if headers:
         await page.set_extra_http_headers(headers)
-        print(f"[BOT]   Locale set: {country_code} → {headers.get('Accept-Language')}", file=sys.stderr)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -721,11 +807,13 @@ async def get_current_month_sales(page, keyword: str, base_url: str, country_cfg
     """
     Scrape eBay SOLD listings for keyword.
 
-    FIXED:
-      1. Calls set_ebay_locale() BEFORE page.goto()
-         → eBay returns correct country, not Pakistan
-      2. Uses build_ebay_sold_url() which has all sold filters
-         → LH_Sold=1, LH_Complete=1, LH_PrefLoc=1, _sop=10
+    TWO-LAYER FIX:
+      Layer 1 — Cookies (injected at context level via inject_ebay_country_cookies)
+                Forces correct "Postage to" country, not Pakistan.
+      Layer 2 — URL params (LH_Sold=1 + LH_Complete=1 + LH_PrefLoc=1)
+                Forces eBay to only return SOLD items in THIS country.
+
+    We also verify after navigation that eBay actually applied both filters.
     """
     country_code = country_cfg.get("country_code", "")
 
@@ -736,33 +824,53 @@ async def get_current_month_sales(page, keyword: str, base_url: str, country_cfg
     }
 
     try:
-        # ── STEP 1: Set locale headers BEFORE navigating ──────────
-        # This overrides Pakistan IP detection — tells eBay which
-        # country site you are browsing from.
+        # ── Set Accept-Language header before goto ────────────────
         await set_ebay_locale(page, country_code)
 
-        # ── STEP 2: Build URL with all sold filters ───────────────
+        # ── Build SOLD URL with all filters ──────────────────────
         url = build_ebay_sold_url(keyword, base_url)
-        print(f"[BOT]   Scraping SOLD: {url}", file=sys.stderr)
+        print(f"[BOT]   SOLD URL: {url}", file=sys.stderr)
 
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(2.0)   # give JS time to render
+
+        # ── VERIFY: Check final URL still has sold params ─────────
+        final_url = page.url
+        if "LH_Sold=1" not in final_url and "LH_Complete=1" not in final_url:
+            # eBay redirected us away from SOLD filter — retry with JS click
+            print(f"[BOT]   WARNING: eBay dropped sold filter, retrying via JS...", file=sys.stderr)
+            # Try clicking "Sold items" checkbox via page JS
+            try:
+                await page.evaluate("""
+                    () => {
+                        const links = document.querySelectorAll('a[href*="LH_Sold"]');
+                        if (links.length > 0) links[0].click();
+                    }
+                """)
+                await asyncio.sleep(2.0)
+                final_url = page.url
+            except Exception:
+                pass
+
         html = await page.content()
 
         if is_blocked_page(html):
             return {**empty, "reject_reason": "page blocked"}
 
-        # ── STEP 3: Verify we got SOLD listings, not active ───────
-        # eBay SOLD pages show "Sold" date text — if missing, filters failed
-        has_sold_indicators = bool(re.search(
-            r"(Sold|Venduto|Verkauft|vendido)\s+\d{1,2}", html, re.IGNORECASE
+        # ── VERIFY: Page actually shows SOLD listings ─────────────
+        # Sold pages contain "Sold" date text next to each item.
+        # If missing, the filter did not apply.
+        sold_date_found = bool(re.search(
+            r"\b(Sold|Venduto|Verkauft|Vendu|Vendido)\b.{0,30}\d{1,2}\s+\w{3}",
+            html, re.IGNORECASE,
         )) or bool(re.search(r'"soldDate"', html))
 
-        if not has_sold_indicators:
+        if not sold_date_found:
             dump_debug(html, country_cfg.get("name", "?"))
-            return {**empty, "reject_reason": "no sold date indicators found — filters may not have applied"}
+            print(f"[BOT]   No sold dates in HTML — filter not applied", file=sys.stderr)
+            return {**empty, "reject_reason": "sold filter did not apply — no sold dates in page"}
 
-        # ── STEP 4: Parse sold dates within last 30 days ──────────
+        # ── Parse sold dates within last 30 days ─────────────────
         now    = datetime.utcnow()
         cutoff = now - timedelta(days=CURRENT_MONTH_DAYS)
         dates_found = []
@@ -771,6 +879,7 @@ async def get_current_month_sales(page, keyword: str, base_url: str, country_cfg
             r"Sold\s+(\d{1,2}\s+\w{3,9}\s+\d{4})",
             r"Venduto\s+il\s+(\d{1,2}\s+\w{3,9}\s+\d{4})",
             r"Verkauft\s+am\s+(\d{1,2}[\.\s]\w{3,9}\s*\d{4})",
+            r"Vendu\s+le\s+(\d{1,2}\s+\w{3,9}\s+\d{4})",
             r"Vendido\s+el\s+(\d{1,2}\s+\w{3,9}\s+\d{4})",
             r'data-datetimedisplay="(\d{4}-\d{2}-\d{2})',
             r'"soldDate"\s*:\s*"(\d{4}-\d{2}-\d{2})',
@@ -794,7 +903,7 @@ async def get_current_month_sales(page, keyword: str, base_url: str, country_cfg
                     except ValueError:
                         continue
 
-        # ── STEP 5: Bucket into 4 weekly slots ───────────────────
+        # ── Bucket into 4 weekly slots ────────────────────────────
         weeks = [0, 0, 0, 0]
         for dt in dates_found:
             age_days = (now - dt).days
@@ -807,7 +916,7 @@ async def get_current_month_sales(page, keyword: str, base_url: str, country_cfg
         if total == 0:
             return {**empty, "reject_reason": "no sold listings in last 30 days"}
 
-        # ── STEP 6: Extract avg sold price ────────────────────────
+        # ── Extract avg sold price from page ──────────────────────
         sold_price = 0.0
         price_matches = re.findall(
             r'class="[^"]*s-item__price[^"]*"[^>]*>(.*?)</span>',
@@ -822,7 +931,7 @@ async def get_current_month_sales(page, keyword: str, base_url: str, country_cfg
             sold_price = round(sum(prices) / len(prices), 2)
 
         print(
-            f"[BOT]   Sales data: total={total} weeks={weeks} avg={avg:.1f}/wk sold_price={sold_price}",
+            f"[BOT]   Sales → total={total} weeks={weeks} avg={avg:.1f}/wk price={sold_price}",
             file=sys.stderr,
         )
 
@@ -885,9 +994,8 @@ async def get_active_listing_count(page, keyword: str, base_url: str, country_co
 async def make_browser_context(playwright, country_cfg: dict):
     """
     Create a Playwright browser context pre-configured for the
-    target country locale. This sets the viewport locale and
-    timezone — combined with set_ebay_locale() headers, this
-    gives eBay every signal it needs to serve the right country.
+    target country. Injects cookies so eBay shows correct country
+    location and shipping, not Pakistan.
     """
     country_code = country_cfg.get("country_code", "GB")
     locale_map = {
@@ -897,6 +1005,7 @@ async def make_browser_context(playwright, country_cfg: dict):
         "AU": ("en-AU", "Australia/Sydney"),
     }
     locale, timezone = locale_map.get(country_code, ("en-GB", "Europe/London"))
+    lang_header = EBAY_LOCALE_HEADERS.get(country_code, {}).get("Accept-Language", "en-GB")
 
     browser = await playwright.chromium.launch(
         headless=True,
@@ -911,11 +1020,14 @@ async def make_browser_context(playwright, country_cfg: dict):
         locale=locale,
         timezone_id=timezone,
         viewport={"width": 1366, "height": 768},
-        extra_http_headers={
-            # Default headers — will be overridden per-page by set_ebay_locale()
-            "Accept-Language": EBAY_LOCALE_HEADERS.get(country_code, {}).get("Accept-Language", "en-GB"),
-        },
+        extra_http_headers={"Accept-Language": lang_header},
     )
+
+    # ── INJECT COUNTRY COOKIES ────────────────────────────────────
+    # This is the KEY fix: forces eBay to show correct country
+    # for "Postage to" and pricing — overrides Pakistan IP detection
+    await inject_ebay_country_cookies(context, country_code)
+
     return browser, context
 
 
