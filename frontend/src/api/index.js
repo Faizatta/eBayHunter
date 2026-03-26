@@ -25,12 +25,3 @@ api.interceptors.response.use(
 )
 
 export default api
-```
-
----
-
-## Step 3 — Fix your `.env` file
-
-Open `.env` in your frontend root folder. Make sure it has:
-```
-VITE_API_URL=https://ebayhunter-production.up.railway.app
