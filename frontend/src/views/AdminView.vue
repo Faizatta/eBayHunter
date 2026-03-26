@@ -57,14 +57,14 @@
     <!-- ── Users tab ── -->
     <div v-if="activeTab === 'Users'" class="animate-fadein">
 
-      <!-- Toolbar -->
       <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
         <div class="relative">
-          <svg class="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z"/>
+          <svg class="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+            fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z"/>
           </svg>
-          <input v-model="userSearch" type="text" placeholder="Search users…"
-            class="input pl-9 max-w-xs" />
+          <input v-model="userSearch" type="text" placeholder="Search users…" class="input pl-9 max-w-xs" />
         </div>
         <div class="flex gap-2">
           <button @click="showCreateModal = true" class="btn-primary">
@@ -83,12 +83,10 @@
         </div>
       </div>
 
-      <!-- Loading -->
       <div v-if="loadingUsers" class="flex items-center justify-center py-20">
         <div class="spinner w-8 h-8" />
       </div>
 
-      <!-- Empty state -->
       <div v-else-if="!filteredUsers.length"
         class="flex flex-col items-center justify-center py-20 text-zinc-500 gap-3 bg-zinc-900/40 border border-zinc-800 rounded-2xl">
         <div class="w-12 h-12 rounded-2xl bg-zinc-800 flex items-center justify-center">
@@ -101,7 +99,6 @@
         <p class="text-xs text-zinc-600">Try adjusting your search filter</p>
       </div>
 
-      <!-- Table -->
       <div v-else class="rounded-2xl border border-zinc-800 overflow-hidden bg-zinc-900/50">
         <table class="w-full border-collapse">
           <thead>
@@ -118,7 +115,6 @@
             <tr v-for="u in filteredUsers" :key="u.id"
               class="group hover:bg-zinc-800/30 transition-colors duration-150">
 
-              <!-- Email -->
               <td class="px-5 py-4">
                 <div class="flex items-center gap-3">
                   <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold font-display flex-shrink-0"
@@ -129,14 +125,13 @@
                 </div>
               </td>
 
-              <!-- Role badge -->
               <td class="px-4 py-4">
                 <span :class="['badge', 'badge-' + u.role.toLowerCase()]">{{ u.role }}</span>
               </td>
 
-              <!-- Usage bar -->
               <td class="px-4 py-4">
-                <div v-if="u.role === 'Admin'" class="flex items-center gap-1.5 text-xs text-purple-400 font-display font-medium">
+                <div v-if="u.role === 'Admin'"
+                  class="flex items-center gap-1.5 text-xs text-purple-400 font-display font-medium">
                   <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                       d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
@@ -156,11 +151,11 @@
                 </div>
               </td>
 
-              <!-- Remaining -->
               <td class="px-4 py-4">
                 <span v-if="u.role === 'Admin'" class="text-purple-400 font-mono text-sm font-bold">∞</span>
                 <div v-else class="flex items-center gap-1.5">
-                  <div class="w-1.5 h-1.5 rounded-full flex-shrink-0" :class="u.remaining > 0 ? 'bg-emerald-400' : 'bg-red-400'" />
+                  <div class="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                    :class="u.remaining > 0 ? 'bg-emerald-400' : 'bg-red-400'" />
                   <span class="font-mono text-sm font-semibold"
                     :class="u.remaining > 0 ? 'text-emerald-400' : 'text-red-400'">
                     {{ u.remaining }}
@@ -168,12 +163,10 @@
                 </div>
               </td>
 
-              <!-- Joined -->
               <td class="px-4 py-4">
                 <span class="text-zinc-500 text-sm font-display">{{ fmtDate(u.createdAt) }}</span>
               </td>
 
-              <!-- Actions -->
               <td class="px-5 py-4">
                 <div class="flex gap-2 items-center justify-end flex-nowrap">
                   <select
@@ -212,7 +205,6 @@
           </tbody>
         </table>
 
-        <!-- Footer -->
         <div class="px-5 py-3 border-t border-zinc-800 bg-zinc-900/60 flex items-center justify-between">
           <span class="text-xs text-zinc-500 font-display">
             Showing <span class="text-zinc-300 font-medium">{{ filteredUsers.length }}</span>
@@ -228,11 +220,12 @@
     <!-- ── Recent Searches tab ── -->
     <div v-if="activeTab === 'Recent Searches'" class="animate-fadein">
 
-      <!-- Toolbar -->
       <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
         <div class="relative">
-          <svg class="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z"/>
+          <svg class="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+            fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z"/>
           </svg>
           <input v-model="searchFilter" type="text" placeholder="Filter by user or keyword…"
             class="input pl-9 max-w-xs" />
@@ -246,12 +239,10 @@
         </button>
       </div>
 
-      <!-- Loading -->
       <div v-if="loadingUsers" class="flex items-center justify-center py-20">
         <div class="spinner w-8 h-8" />
       </div>
 
-      <!-- Empty state -->
       <div v-else-if="!filteredSearches.length"
         class="flex flex-col items-center justify-center py-20 text-zinc-500 gap-3 bg-zinc-900/40 border border-zinc-800 rounded-2xl">
         <div class="w-12 h-12 rounded-2xl bg-zinc-800 flex items-center justify-center">
@@ -268,7 +259,6 @@
         <div v-for="group in groupedSearches" :key="group.email"
           class="rounded-2xl border border-zinc-800 overflow-hidden bg-zinc-900/50">
 
-          <!-- User section header -->
           <div class="flex items-center gap-3 px-5 py-3.5 bg-zinc-900 border-b border-zinc-800">
             <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold font-display flex-shrink-0"
               :class="avatarColor(group.role)">
@@ -281,13 +271,13 @@
             </span>
           </div>
 
-          <!-- Per-user searches table -->
           <table class="w-full border-collapse">
             <thead>
               <tr class="border-b border-zinc-800/60 bg-zinc-900/40">
                 <th class="text-left px-5 py-2.5 text-xs font-display font-semibold text-zinc-500 tracking-wide uppercase w-10">#</th>
                 <th class="text-left px-4 py-2.5 text-xs font-display font-semibold text-zinc-500 tracking-wide uppercase">Keyword</th>
                 <th class="text-left px-4 py-2.5 text-xs font-display font-semibold text-zinc-500 tracking-wide uppercase">Results</th>
+                <th class="text-left px-4 py-2.5 text-xs font-display font-semibold text-zinc-500 tracking-wide uppercase">Top Profit</th>
                 <th class="text-left px-4 py-2.5 text-xs font-display font-semibold text-zinc-500 tracking-wide uppercase">Date</th>
               </tr>
             </thead>
@@ -298,7 +288,8 @@
                 <td class="px-4 py-3">
                   <div class="flex items-center gap-2">
                     <svg class="w-3.5 h-3.5 text-zinc-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z"/>
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z"/>
                     </svg>
                     <span class="text-sm text-zinc-200 font-medium">{{ s.keyword }}</span>
                   </div>
@@ -309,6 +300,14 @@
                     <span class="text-zinc-600 font-display">results</span>
                   </span>
                 </td>
+                <!-- ✅ New: top profit column in admin view -->
+                <td class="px-4 py-3">
+                  <span v-if="s.parsedResults?.length"
+                    class="text-emerald-400 text-xs font-mono font-medium">
+                    {{ adminBestProfit(s.parsedResults) }}
+                  </span>
+                  <span v-else class="text-zinc-700 text-xs">—</span>
+                </td>
                 <td class="px-4 py-3 text-zinc-500 text-xs font-display">{{ fmtDate(s.createdAt) }}</td>
               </tr>
             </tbody>
@@ -316,7 +315,8 @@
         </div>
 
         <div class="text-xs text-zinc-600 font-display px-1">
-          {{ filteredSearches.length }} search{{ filteredSearches.length !== 1 ? 'es' : '' }} across {{ groupedSearches.length }} user{{ groupedSearches.length !== 1 ? 's' : '' }}
+          {{ filteredSearches.length }} search{{ filteredSearches.length !== 1 ? 'es' : '' }}
+          across {{ groupedSearches.length }} user{{ groupedSearches.length !== 1 ? 's' : '' }}
         </div>
       </div>
     </div>
@@ -370,7 +370,8 @@
             <div v-if="createError"
               class="flex items-center gap-2 text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-xl px-4 py-3">
               <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
               </svg>
               {{ createError }}
             </div>
@@ -403,7 +404,9 @@
           <h3 class="font-display font-bold text-zinc-100 mb-1">Delete user?</h3>
           <p class="text-sm text-zinc-400 mb-6 leading-relaxed">
             This will permanently delete
-            <span class="text-zinc-200 font-medium font-mono bg-zinc-800 px-1.5 py-0.5 rounded text-xs">{{ confirmDeleteUser.email }}</span>
+            <span class="text-zinc-200 font-medium font-mono bg-zinc-800 px-1.5 py-0.5 rounded text-xs">
+              {{ confirmDeleteUser.email }}
+            </span>
             and all their search history. This action cannot be undone.
           </p>
           <div class="flex gap-3">
@@ -442,9 +445,9 @@
 import { ref, computed, onMounted } from 'vue'
 import api from '../api'
 
-const tabs      = ['Users', 'Recent Searches']
-const activeTab = ref('Users')
-const roles     = ['Admin', 'Pro', 'Basic', 'Free']
+const tabs       = ['Users', 'Recent Searches']
+const activeTab  = ref('Users')
+const roles      = ['Admin', 'Pro', 'Basic', 'Free']
 const planLimits = { Admin: '∞', Pro: 200, Basic: 50, Free: 5 }
 const planLabels = { Admin: '∞', Pro: '200', Basic: '50', Free: '5' }
 
@@ -461,6 +464,20 @@ const showCreateModal = ref(false)
 const creating        = ref(false)
 const createError     = ref('')
 const cf              = ref({ email: '', password: '', role: 'Free' })
+
+// ── Currency helper ────────────────────────────────────────────────────────
+function currencySymbol(currency) {
+  const map = { GBP: '£', EUR: '€', AUD: 'A$', USD: '$' }
+  return map[currency] ?? (currency ? currency + ' ' : '$')
+}
+
+// ── Best profit across a result set (for admin summary column) ─────────────
+function adminBestProfit(products) {
+  if (!products?.length) return '—'
+  const best = products.reduce((a, b) => (b.profit ?? 0) > (a.profit ?? 0) ? b : a)
+  const sym  = currencySymbol(best.currency)
+  return (best.profit >= 0 ? '+' : '') + sym + (best.profit ?? 0).toFixed(2)
+}
 
 const filteredUsers = computed(() => {
   const list = userSearch.value
@@ -485,8 +502,12 @@ const groupedSearches = computed(() => {
   for (const s of filteredSearches.value) {
     const email = s.userEmail ?? s.user?.email ?? '—'
     const role  = s.userRole  ?? s.user?.role  ?? 'Free'
+    // Parse results JSON if present for the top-profit column
+    const parsedResults = (() => {
+      try { return JSON.parse(s.results ?? '[]') } catch { return [] }
+    })()
     if (!map.has(email)) map.set(email, { email, role, searches: [] })
-    map.get(email).searches.push(s)
+    map.get(email).searches.push({ ...s, parsedResults })
   }
   return [...map.values()]
 })
