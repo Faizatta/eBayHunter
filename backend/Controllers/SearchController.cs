@@ -63,14 +63,35 @@ public class SearchController : ControllerBase
         });
         await _db.SaveChangesAsync();
 
-        return Ok(new SearchResponse
-        {
-            Success           = true,
-            Keyword           = request.Keyword,
-            Products          = products,
-            TotalFound        = products.Count,
-            SearchesRemaining = unlimited ? int.MaxValue : Math.Max(0, user.SearchLimit - user.SearchUsed),
-        });
+      return Ok(new SearchResponse
+{
+    Success  = true,
+    Keyword  = request.Keyword,
+    Products = products.Select(p => new {
+        p.Title,
+        p.Country,
+        p.Currency,
+        p.EbayPrice,
+        EbayLowestPrice   = p.EbayPrice,
+        p.AliexpressPrice,
+        AliRating         = p.AliRating > 0 ? p.AliRating : 0.0,
+        AliReviews        = p.Reviews,
+        p.Profit,
+        SoldPerWeek       = p.SoldLastWeek,
+        TotalSoldMonth    = p.SoldLastWeek * 4,
+        WeeklyConsistency = "",
+        CompetitionLevel  = "medium",
+        ActiveListings    = 0,
+        p.FreeShipping,
+        LocalShipping     = true,
+        p.DeliveryDays,
+        p.EbayUrl,
+        p.AliexpressUrl,
+        WhyGoodProduct    = $"Sells ~{p.SoldLastWeek}/week with {p.Profit:F2} profit margin.",
+    }).ToList(),
+    TotalFound        = products.Count,
+    SearchesRemaining = unlimited ? int.MaxValue : Math.Max(0, user.SearchLimit - user.SearchUsed),
+});
     }
 
     [HttpGet("user/limits")]
