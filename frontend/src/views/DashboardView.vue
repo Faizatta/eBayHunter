@@ -280,7 +280,7 @@
                 <div class="flex flex-col gap-1.5">
                   <a :href="p.ebayUrl" target="_blank" rel="noopener noreferrer"
                     class="text-xs bg-zinc-800 hover:bg-brand-500/20 hover:text-brand-400 border border-zinc-700 hover:border-brand-500/30 text-zinc-300 px-2.5 py-1 rounded-lg transition-all font-display text-center">
-                    eBay ↗
+                    eBay 
                   </a>
                   <a :href="p.aliexpressUrl" target="_blank" rel="noopener noreferrer"
                     class="text-xs bg-zinc-800 hover:bg-orange-500/20 hover:text-orange-400 border border-zinc-700 hover:border-orange-500/30 text-zinc-300 px-2.5 py-1 rounded-lg transition-all font-display text-center">
