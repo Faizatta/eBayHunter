@@ -56,7 +56,7 @@ except ImportError:
 # ─────────────────────────────────────────────────────────────────
 
 # ── Sales filters (CURRENT MONTH only) ───────────────────────────
-MIN_SOLD_PER_WEEK    = 10     # eBay: minimum sales/week (current month)
+MIN_SOLD_PER_WEEK    = 5    # eBay: minimum sales/week (current month)
 MAX_SOLD_PER_WEEK    = 50     # eBay: maximum sales/week (avoid oversaturation)
 MIN_WEEKS_CONSISTENT = 2      # Must show consistent sales across at least 2 weeks
 CURRENT_MONTH_DAYS   = 30     # Only analyse sold listings from the last 30 days
