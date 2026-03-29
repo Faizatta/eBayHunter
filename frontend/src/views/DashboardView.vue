@@ -2,7 +2,8 @@
   <div class="p-6 max-w-7xl mx-auto">
 
     <div class="mb-7">
-      <h1 class="text-2xl font-display font-bold text-zinc-100">Product Searchh
+      <h1 class="text-2xl font-display font-bold text-zinc-100">Product Search
+        
       </h1>
       <div class="flex items-center gap-2 mt-1.5 mb-1">
         <img src="https://flagcdn.com/w40/de.png" alt="Germany"   class="w-6 h-4 rounded-sm object-cover" />
