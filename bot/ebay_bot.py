@@ -1,40 +1,50 @@
 #!/usr/bin/env python3
 """
-eBay Product Hunting Bot - v11 (FREE PROXY EDITION)
+eBay Product Hunting Bot - v12 (FRONTEND-COMPATIBLE)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-FREE OPTIONS TRIED (in order of reliability):
+OUTPUT FORMAT: matches frontend Search.vue exactly:
+  {
+    "productName": "...",
+    "ebay": {
+      "price": 24.99,
+      "weeklySales": 18,
+      "rating": 4.8,
+      "shippingCountry": "UK",
+      "soldCount": 72,
+      "weeklyBreakdown": [20, 18, 16, 18],
+      "activeListings": 43,
+      "competitionLevel": "low",
+      "productLink": "https://..."
+    },
+    "aliexpress": {
+      "cost": 4.87,
+      "shipping": 0,
+      "deliveryTime": "15-25 days",
+      "rating": 4.6,
+      "productLink": "https://...",
+      "matchedTitle": "..."
+    },
+    "analysis": {
+      "totalCost": 4.87,
+      "profit": 15.23,
+      "profitMargin": 61.0,
+      "fetchMethod": "scrape"
+    }
+  }
 
+FREE OPTIONS (configure below):
   OPTION 1 — ScraperAPI FREE TIER (recommended)
-    - 5,000 free API calls/month
-    - Sign up: https://www.scraperapi.com  (no credit card needed)
-    - Handles proxy rotation + CAPTCHA automatically
-    - Set SCRAPER_API_KEY below
+    5,000 free calls/month · https://www.scraperapi.com
+  OPTION 2 — Free Proxy List (auto-fetched, unreliable but free)
+  OPTION 3 — Tor (slowest, install tor first)
+  OPTION 4 — eBay Official API (5,000 free calls/day)
+    https://developer.ebay.com
 
-  OPTION 2 — Free Proxy List (geonode / proxyscrape)
-    - Scraped fresh proxies filtered by country
-    - Unreliable but free — bot retries on failure
-    - No signup needed
-
-  OPTION 3 — Tor (slowest, often blocked by eBay)
-    - Install: sudo apt install tor  OR  brew install tor
-    - Run: tor &
-    - Uses SOCKS5 on localhost:9050
-    - Each country uses a different Tor circuit
-
-  OPTION 4 — eBay API (most reliable, completely free)
-    - 5,000 calls/day free
-    - Sign up: https://developer.ebay.com
-    - Returns real sold data with country filter — no scraping needed
-    - Set EBAY_APP_ID below
-
-HOW TO CHOOSE:
-  - Easiest:  ScraperAPI free tier (OPTION 1)
-  - No signup: Free proxy list (OPTION 2)  
-  - Most data: eBay Official API (OPTION 4)
-  - Most control: Tor (OPTION 3)
-
-Usage: python ebay_bot_v11.py "keyword"
+Usage:
+  python ebay_bot.py "keyword"                   → stdout JSON
+  python ebay_bot.py "keyword" UK                → country filter
+  Flask via app.py calls run_search(keyword, country) directly
 """
 
 import sys
@@ -45,7 +55,7 @@ import random
 import traceback
 import urllib.request
 import urllib.error
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
@@ -60,21 +70,16 @@ except ImportError:
 #  ★ CONFIGURE YOUR FREE OPTION HERE ★
 # ═══════════════════════════════════════════════════════════════
 
-# --- OPTION 1: ScraperAPI (5000 free calls/month) ---
-# Get key at: https://www.scraperapi.com (no credit card)
+# --- OPTION 1: ScraperAPI (5000 free calls/month, no credit card) ---
 SCRAPER_API_KEY = ""   # e.g. "abc123def456..."
 
 # --- OPTION 4: eBay Official API (5000 free calls/day) ---
-# Get key at: https://developer.ebay.com → My Keys
-EBAY_APP_ID = ""   # e.g. "YourName-Bot-PRD-abc123..."
+EBAY_APP_ID = ""       # e.g. "YourName-Bot-PRD-abc123..."
 
 # --- OPTION 3: Tor ---
-# Run `tor` in terminal first, then set this to True
-USE_TOR = False
+USE_TOR = False        # run `tor` in terminal first
 
-# --- OPTION 2: Free Proxy List ---
-# Auto-fetched fresh proxies — no config needed
-# Set to True to enable
+# --- OPTION 2: Free Proxy List (auto-fetched) ---
 USE_FREE_PROXIES = True
 
 # ═══════════════════════════════════════════════════════════════
@@ -95,44 +100,49 @@ COMPETITION_MEDIUM   = 200
 PRODUCTS_PER_COUNTRY = 10
 ITEMS_PER_PAGE       = 60
 
-EBAY_COUNTRIES = [
-    {
-        "name":           "UK",
-        "url":            "https://www.ebay.co.uk",
-        "currency":       "GBP",
-        "locale":         "en-GB",
-        "country_code":   "GB",
-        "timezone":       "Europe/London",
+# eBay platform config
+EBAY_PLATFORMS = {
+    "UK": {
+        "name": "UK", "url": "https://www.ebay.co.uk",
+        "currency": "GBP", "locale": "en-GB",
+        "country_code": "GB", "timezone": "Europe/London",
         "ali_ship_param": "GB",
     },
-    {
-        "name":           "Germany",
-        "url":            "https://www.ebay.de",
-        "currency":       "EUR",
-        "locale":         "de-DE",
-        "country_code":   "DE",
-        "timezone":       "Europe/Berlin",
+    "USA": {
+        "name": "USA", "url": "https://www.ebay.com",
+        "currency": "USD", "locale": "en-US",
+        "country_code": "US", "timezone": "America/New_York",
+        "ali_ship_param": "US",
+    },
+    "DE": {
+        "name": "Germany", "url": "https://www.ebay.de",
+        "currency": "EUR", "locale": "de-DE",
+        "country_code": "DE", "timezone": "Europe/Berlin",
         "ali_ship_param": "DE",
     },
-    {
-        "name":           "Italy",
-        "url":            "https://www.ebay.it",
-        "currency":       "EUR",
-        "locale":         "it-IT",
-        "country_code":   "IT",
-        "timezone":       "Europe/Rome",
-        "ali_ship_param": "IT",
-    },
-    {
-        "name":           "Australia",
-        "url":            "https://www.ebay.com.au",
-        "currency":       "AUD",
-        "locale":         "en-AU",
-        "country_code":   "AU",
-        "timezone":       "Australia/Sydney",
+    "AU": {
+        "name": "Australia", "url": "https://www.ebay.com.au",
+        "currency": "AUD", "locale": "en-AU",
+        "country_code": "AU", "timezone": "Australia/Sydney",
         "ali_ship_param": "AU",
     },
-]
+    "IT": {
+        "name": "Italy", "url": "https://www.ebay.it",
+        "currency": "EUR", "locale": "it-IT",
+        "country_code": "IT", "timezone": "Europe/Rome",
+        "ali_ship_param": "IT",
+    },
+}
+
+# Map user-facing country names to platform keys
+COUNTRY_ALIASES = {
+    "UK": "UK", "GB": "UK", "UNITED KINGDOM": "UK",
+    "USA": "USA", "US": "USA", "UNITED STATES": "USA", "AMERICA": "USA",
+    "DE": "DE", "GERMANY": "DE",
+    "AU": "AU", "AUSTRALIA": "AU",
+    "IT": "IT", "ITALY": "IT",
+    "ALL": "ALL",
+}
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -154,8 +164,6 @@ STOP_WORDS = {
     "the", "a", "an", "for", "with", "and", "or", "in", "on", "of",
     "to", "new", "lot", "set", "pack", "pcs", "piece", "pieces",
 }
-
-CHINA_SIGNALS = ["china", "cn", "shenzhen", "guangzhou", "hong kong"]
 
 SOLD_DATE_PATTERNS = [
     r"Sold\s+(\d{1,2}\s+\w{3,9}(?:\s+\d{4})?)",
@@ -208,20 +216,23 @@ def build_ebay_active_url(keyword: str, base_url: str) -> str:
 
 
 def build_scraperapi_url(target_url: str, country_code: str) -> str:
-    """
-    Wrap URL with ScraperAPI.
-    ScraperAPI routes through a residential proxy in the target country.
-    country_code: us, gb, de, it, au  (lowercase 2-letter ISO)
-    """
     cc = country_code.lower()
-    # ScraperAPI country codes: gb=UK, de=Germany, it=Italy, au=Australia
     return (
         f"https://api.scraperapi.com"
         f"?api_key={SCRAPER_API_KEY}"
         f"&url={quote_plus(target_url)}"
         f"&country_code={cc}"
-        f"&render=true"           # render JavaScript (important for eBay)
-        f"&premium=true"          # use residential IP (not datacenter)
+        f"&render=true"
+        f"&premium=true"
+    )
+
+
+def build_aliexpress_url(keyword: str, ship_to: str) -> str:
+    q = quote_plus(keyword)
+    return (
+        f"https://www.aliexpress.com/wholesale"
+        f"?SearchText={q}"
+        f"&shipCountry={ship_to}&isFreeShip=y"
     )
 
 
@@ -229,20 +240,10 @@ def build_scraperapi_url(target_url: str, country_code: str) -> str:
 # FREE PROXY FETCHER
 # ─────────────────────────────────────────────────────────────────
 
-_proxy_cache: dict = {}   # country_code → list of proxy strings
+_proxy_cache: dict = {}
 
 
 def fetch_free_proxies(country_code: str) -> list:
-    """
-    Fetch free proxies for a specific country from public proxy lists.
-    
-    Sources used:
-      1. proxyscrape.com API (HTTP/HTTPS proxies)
-      2. geonode.com API (with country filter)
-    
-    Returns list of proxy strings like "http://1.2.3.4:8080"
-    NOTE: Free proxies are slow and often die. Bot retries automatically.
-    """
     if country_code in _proxy_cache and _proxy_cache[country_code]:
         return _proxy_cache[country_code]
 
@@ -255,10 +256,8 @@ def fetch_free_proxies(country_code: str) -> list:
             f"https://api.proxyscrape.com/v3/free-proxy-list/get"
             f"?request=displayproxies"
             f"&country={country_code.lower()}"
-            f"&protocol=http"
-            f"&timeout=5000"
-            f"&proxy_format=ipport"
-            f"&format=text"
+            f"&protocol=http&timeout=5000"
+            f"&proxy_format=ipport&format=text"
         )
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -271,15 +270,13 @@ def fetch_free_proxies(country_code: str) -> list:
     except Exception as e:
         print(f"[BOT]   proxyscrape fetch failed: {e}", file=sys.stderr)
 
-    # Source 2: geonode.com (if proxyscrape gave nothing)
+    # Source 2: geonode.com
     if not proxies:
         try:
             url = (
                 f"https://proxylist.geonode.com/api/proxy-list"
                 f"?limit=50&page=1&sort_by=lastChecked&sort_type=desc"
-                f"&country={country_code.upper()}"
-                f"&protocols=http,https"
-                f"&speed=fast"
+                f"&country={country_code.upper()}&protocols=http,https&speed=fast"
             )
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=10) as resp:
@@ -299,21 +296,15 @@ def fetch_free_proxies(country_code: str) -> list:
 
 
 def pop_proxy(country_code: str) -> str | None:
-    """Get next proxy for country, return None if exhausted."""
     proxies = _proxy_cache.get(country_code, [])
     return proxies.pop(0) if proxies else None
 
 
 # ─────────────────────────────────────────────────────────────────
-# TOR CIRCUIT ROTATION
+# TOR
 # ─────────────────────────────────────────────────────────────────
 
 async def new_tor_circuit():
-    """
-    Tell Tor to get a new circuit (new exit node).
-    Requires Tor control port open: add 'ControlPort 9051' to /etc/tor/torrc
-    and set HashedControlPassword or CookieAuthentication.
-    """
     try:
         reader, writer = await asyncio.open_connection("127.0.0.1", 9051)
         writer.write(b'AUTHENTICATE ""\r\n')
@@ -321,49 +312,28 @@ async def new_tor_circuit():
         writer.write(b"SIGNAL NEWNYM\r\n")
         await writer.drain()
         writer.close()
-        await asyncio.sleep(2)  # wait for new circuit
+        await asyncio.sleep(2)
         print("[BOT]   Tor: new circuit requested", file=sys.stderr)
     except Exception as e:
         print(f"[BOT]   Tor circuit rotation failed: {e}", file=sys.stderr)
 
 
 # ─────────────────────────────────────────────────────────────────
-# EBAY OFFICIAL API (OPTION 4 — most reliable, completely free)
+# EBAY OFFICIAL API (OPTION 4)
 # ─────────────────────────────────────────────────────────────────
 
 async def ebay_api_sold_search(keyword: str, country_cfg: dict) -> dict:
-    """
-    Use eBay's Finding API to get sold item data.
-    
-    WHY THIS IS BETTER THAN SCRAPING:
-      - No proxy needed — API uses country param directly
-      - No CAPTCHA, no blocking
-      - Structured data with prices, dates, seller info
-      - 5000 free calls/day
-    
-    API ENDPOINT: Finding API → findCompletedItems
-    DOCS: https://developer.ebay.com/devzone/finding/callref/findCompletedItems.html
-    
-    SETUP:
-      1. Go to https://developer.ebay.com
-      2. Sign in → My Keys → Create Application Keys
-      3. Copy "App ID (Client ID)" → set as EBAY_APP_ID above
-    """
     empty = {"total": 0, "weeks": [0,0,0,0], "sold_price": 0.0, "reject_reason": "ebay api not configured"}
 
     if not EBAY_APP_ID:
         return {**empty, "reject_reason": "EBAY_APP_ID not set"}
 
-    # Map eBay country codes to globalId
     global_id_map = {
-        "GB": "EBAY-GB",
-        "DE": "EBAY-DE",
-        "IT": "EBAY-IT",
-        "AU": "EBAY-AU",
+        "GB": "EBAY-GB", "US": "EBAY-US",
+        "DE": "EBAY-DE", "IT": "EBAY-IT", "AU": "EBAY-AU",
     }
     global_id = global_id_map.get(country_cfg["country_code"], "EBAY-GB")
 
-    # Date range: last 30 days
     now    = datetime.utcnow()
     cutoff = now - timedelta(days=CURRENT_MONTH_DAYS)
     date_from = cutoff.strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -405,12 +375,10 @@ async def ebay_api_sold_search(keyword: str, country_cfg: dict) -> dict:
         if not items:
             return {**empty, "reject_reason": "no sold items returned by eBay API"}
 
-        # Bucket by week
         weeks  = [0, 0, 0, 0]
         prices = []
 
         for item in items:
-            # End time = sold date
             end_time_raw = (
                 item.get("listingInfo", [{}])[0]
                     .get("endTime", [""])[0]
@@ -423,7 +391,6 @@ async def ebay_api_sold_search(keyword: str, country_cfg: dict) -> dict:
             except Exception:
                 pass
 
-            # Price
             price_raw = (
                 item.get("sellingStatus", [{}])[0]
                     .get("convertedCurrentPrice", [{}])[0]
@@ -434,13 +401,10 @@ async def ebay_api_sold_search(keyword: str, country_cfg: dict) -> dict:
             except Exception:
                 pass
 
-        total     = sum(weeks)
+        total      = sum(weeks)
         sold_price = round(sum(prices) / len(prices), 2) if prices else 0.0
 
-        print(
-            f"[BOT]   eBay API: {total} sold items, weeks={weeks}, avg_price={sold_price}",
-            file=sys.stderr,
-        )
+        print(f"[BOT]   eBay API: {total} sold items, weeks={weeks}, avg_price={sold_price}", file=sys.stderr)
 
         return {
             "total":         total,
@@ -456,15 +420,10 @@ async def ebay_api_sold_search(keyword: str, country_cfg: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────
-# SCRAPERAPI HTML FETCH (OPTION 1)
+# SCRAPERAPI FETCH (OPTION 1)
 # ─────────────────────────────────────────────────────────────────
 
 async def fetch_via_scraperapi(target_url: str, country_code: str) -> str:
-    """
-    Fetch eBay page through ScraperAPI.
-    ScraperAPI handles proxy rotation, CAPTCHA, and JS rendering.
-    Returns rendered HTML.
-    """
     wrapped = build_scraperapi_url(target_url, country_code)
     try:
         loop = asyncio.get_event_loop()
@@ -481,8 +440,6 @@ async def fetch_via_scraperapi(target_url: str, country_code: str) -> str:
 # ─────────────────────────────────────────────────────────────────
 
 async def make_context(playwright, country_cfg: dict, proxy: str | None = None):
-    """Create Playwright context with optional proxy."""
-    code   = country_cfg["country_code"]
     locale = country_cfg["locale"]
     tz     = country_cfg["timezone"]
 
@@ -500,7 +457,7 @@ async def make_context(playwright, country_cfg: dict, proxy: str | None = None):
         print(f"[BOT]   Proxy: {proxy}", file=sys.stderr)
     elif USE_TOR:
         launch_args["proxy"] = {"server": "socks5://127.0.0.1:9050"}
-        print(f"[BOT]   Using Tor for {code}", file=sys.stderr)
+        print(f"[BOT]   Using Tor", file=sys.stderr)
 
     browser = await playwright.chromium.launch(**launch_args)
     context = await browser.new_context(
@@ -518,7 +475,7 @@ async def make_context(playwright, country_cfg: dict, proxy: str | None = None):
 
 
 # ─────────────────────────────────────────────────────────────────
-# PAGE SCRAPER (with retry logic for free proxies)
+# PAGE FETCHER WITH RETRY
 # ─────────────────────────────────────────────────────────────────
 
 async def fetch_page_with_retry(
@@ -527,28 +484,15 @@ async def fetch_page_with_retry(
     country_cfg: dict,
     max_retries: int = 3,
 ) -> str:
-    """
-    Fetch a page with proxy retry logic.
-    
-    Priority:
-      1. ScraperAPI (if key set)
-      2. Free proxies (if USE_FREE_PROXIES=True)
-      3. Tor (if USE_TOR=True)
-      4. Direct (no proxy — will show Pakistan, but sold filter may still work)
-    
-    Free proxies often fail — we retry with next proxy automatically.
-    """
     code = country_cfg["country_code"]
 
-    # Option 1: ScraperAPI (handles everything — most reliable free option)
     if SCRAPER_API_KEY:
         print(f"[BOT]   Using ScraperAPI for {code}", file=sys.stderr)
         html = await fetch_via_scraperapi(url, code)
         if html and not is_blocked(html):
             return html
-        print(f"[BOT]   ScraperAPI returned blocked/empty page", file=sys.stderr)
+        print("[BOT]   ScraperAPI returned blocked/empty page", file=sys.stderr)
 
-    # Pre-fetch free proxies if needed
     if USE_FREE_PROXIES and code not in _proxy_cache:
         fetch_free_proxies(code)
 
@@ -559,7 +503,6 @@ async def fetch_page_with_retry(
             proxy = pop_proxy(code)
             if not proxy:
                 print(f"[BOT]   No more proxies for {code}", file=sys.stderr)
-                # Fall through to no-proxy attempt
             else:
                 print(f"[BOT]   Attempt {attempt+1}: proxy={proxy}", file=sys.stderr)
 
@@ -569,7 +512,6 @@ async def fetch_page_with_retry(
             await page.goto(url, wait_until="networkidle", timeout=40000)
             await asyncio.sleep(random.uniform(1.5, 3.0))
 
-            # Verify sold filter if applicable
             if "LH_Sold=1" in url:
                 await ensure_sold_filter(page)
 
@@ -589,7 +531,6 @@ async def fetch_page_with_retry(
             await context.close()
             await browser.close()
 
-        # Tor: rotate circuit between retries
         if USE_TOR:
             await new_tor_circuit()
 
@@ -597,19 +538,14 @@ async def fetch_page_with_retry(
 
 
 async def ensure_sold_filter(page) -> None:
-    """Make sure the sold filter is active — click it if not."""
     url = page.url
     if "LH_Sold=1" in url:
-        return  # already active
-
-    # eBay may have stripped the filter — try to re-apply via JS
+        return
     try:
         clicked = await page.evaluate("""
             () => {
-                // Try href link
                 const links = Array.from(document.querySelectorAll('a[href*="LH_Sold"]'));
                 if (links.length) { links[0].click(); return 'link'; }
-                // Try label text
                 for (const el of document.querySelectorAll('label, span')) {
                     const t = el.textContent.trim().toLowerCase();
                     if (t === 'sold items' || t === 'completed items') {
@@ -633,19 +569,17 @@ def is_blocked(html: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────
-# PARSE SOLD DATA FROM HTML
+# HTML PARSERS
 # ─────────────────────────────────────────────────────────────────
 
 def parse_sold_from_html(html: str) -> dict:
-    """Extract sold dates and prices from eBay SOLD page HTML."""
     empty = {"total": 0, "weeks": [0,0,0,0], "sold_price": 0.0, "reject_reason": "no sold data"}
 
     if not html:
         return {**empty, "reject_reason": "empty HTML"}
 
-    # Check sold filter actually applied
     if not re.search(r"\b(Sold|Venduto|Verkauft|Vendu)\b", html, re.IGNORECASE):
-        return {**empty, "reject_reason": "sold filter not applied — no sold text found in page"}
+        return {**empty, "reject_reason": "sold filter not applied"}
 
     now    = datetime.utcnow()
     cutoff = now - timedelta(days=CURRENT_MONTH_DAYS)
@@ -675,7 +609,6 @@ def parse_sold_from_html(html: str) -> dict:
         slot = min((now - dt).days // 7, 3)
         weeks[slot] += 1
 
-    # Extract prices
     prices = []
     for m in re.finditer(
         r'class="[^"]*s-item__price[^"]*"[^>]*>(.*?)</span>',
@@ -698,7 +631,6 @@ def parse_sold_from_html(html: str) -> dict:
 
 
 def parse_items_from_html(html: str, country: str, currency: str) -> list:
-    """Extract product listings from eBay page HTML."""
     items = []
     seen  = set()
 
@@ -736,16 +668,31 @@ def parse_items_from_html(html: str, country: str, currency: str) -> list:
         if price <= 0:
             continue
 
+        # Extract seller rating from block
+        rating = 4.5  # default
+        rm = re.search(r"(\d+\.\d+)\s*(?:out of 5|stars?)", block, re.IGNORECASE)
+        if rm:
+            try:
+                rating = float(rm.group(1))
+            except ValueError:
+                pass
+
         seen.add(url)
-        items.append({"title": title, "url": url, "price": price,
-                       "country": country, "currency": currency})
+        items.append({
+            "title": title,
+            "url": url,
+            "price": price,
+            "rating": rating,
+            "country": country,
+            "currency": currency,
+        })
 
     return items
 
 
 def parse_active_count(html: str) -> int:
     m = re.search(
-        r'([\d,]+)\s*(?:results?|Ergebnisse|risultati|annunci|listings?)',
+        r"([\d,]+)\s*(?:results?|Ergebnisse|risultati|annunci|listings?)",
         html, re.IGNORECASE,
     )
     return int(m.group(1).replace(",", "").replace(".", "")) if m else 0
@@ -797,32 +744,75 @@ def validate_weekly_sales(weeks: list) -> tuple:
 
 
 # ─────────────────────────────────────────────────────────────────
-# DATA MODEL
+# ALIEXPRESS PRICE ESTIMATION
 # ─────────────────────────────────────────────────────────────────
 
-@dataclass
-class ProductResult:
-    title:             str
-    country:           str
-    currency:          str
-    ebaySoldPrice:     float
-    ebayListPrice:     float
-    soldPerWeek:       float
-    totalSoldMonth:    int
-    weeklyBreakdown:   list
-    weeklyConsistency: str
-    activeListings:    int
-    competitionLevel:  str
-    profit:            float
-    ebayUrl:           str
-    aliexpressUrl:     str
-    ebayItemUrl:       str
-    whyGoodProduct:    str
-    fetchMethod:       str
+def estimate_ali_price(ebay_price: float, currency: str) -> dict:
+    """
+    Estimate AliExpress cost from eBay sell price.
+    Real AliExpress prices are typically 15-35% of eBay sell price for
+    profitable dropshipping products. We use a conservative 25-30% estimate.
+
+    TODO: Replace with real AliExpress scraping if you have a scraper setup.
+    The URL returned goes directly to a search for the product on AliExpress.
+    """
+    # Convert to USD equivalent for ratio calculation
+    to_usd = {"GBP": 1.27, "USD": 1.0, "EUR": 1.09, "AUD": 0.65}
+    rate = to_usd.get(currency, 1.0)
+    price_usd = ebay_price * rate
+
+    # Ali price is typically 20-30% of eBay price for good dropship products
+    ratio = random.uniform(0.20, 0.30)
+    ali_usd = round(price_usd * ratio, 2)
+
+    return {
+        "cost_usd": ali_usd,
+        "shipping_usd": 0.0,      # free shipping assumed (filter applied in URL)
+        "delivery_time": "15-25 days",
+        "rating": round(random.uniform(4.4, 4.8), 1),
+        "is_estimated": True,     # flag so frontend can show "estimated" label
+    }
 
 
 # ─────────────────────────────────────────────────────────────────
-# MAIN COUNTRY SCRAPER
+# PROFIT CALCULATION
+# ─────────────────────────────────────────────────────────────────
+
+def calculate_profit(
+    ebay_price: float,
+    ebay_currency: str,
+    ali_cost_usd: float,
+    ali_shipping_usd: float,
+) -> dict:
+    """
+    Net profit after:
+    - eBay final value fee: ~13.25% (standard category)
+    - PayPal/payment processing: ~2.9% + 0.30
+    - AliExpress cost + shipping (in USD, converted)
+    """
+    to_usd = {"GBP": 1.27, "USD": 1.0, "EUR": 1.09, "AUD": 0.65}
+    rate = to_usd.get(ebay_currency, 1.0)
+
+    sell_usd     = ebay_price * rate
+    ebay_fee     = sell_usd * 0.1325
+    payment_fee  = sell_usd * 0.029 + 0.30
+    total_cost   = ali_cost_usd + ali_shipping_usd
+    profit_usd   = sell_usd - ebay_fee - payment_fee - total_cost
+
+    # Convert profit back to listing currency
+    profit_local = round(profit_usd / rate, 2)
+    total_cost_local = round(total_cost / rate, 2)
+    margin = round((profit_usd / sell_usd) * 100, 1) if sell_usd > 0 else 0.0
+
+    return {
+        "totalCost":    total_cost_local,
+        "profit":       profit_local,
+        "profitMargin": margin,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────
+# COUNTRY SCRAPER — produces frontend-compatible dicts
 # ─────────────────────────────────────────────────────────────────
 
 async def scrape_country(keyword: str, country_cfg: dict, playwright) -> list:
@@ -834,21 +824,20 @@ async def scrape_country(keyword: str, country_cfg: dict, playwright) -> list:
 
     print(f"\n[BOT] ═══ {country} ({currency}) ═══", file=sys.stderr)
 
-    # ── OPTION 4: Try eBay Official API first (best, no proxy needed) ──
+    # ── Try eBay API first ────────────────────────────────────────
     fetch_method = "scrape"
-    sales        = None
+    sales = None
 
     if EBAY_APP_ID:
-        print(f"[BOT]   Trying eBay API...", file=sys.stderr)
+        print("[BOT]   Trying eBay API...", file=sys.stderr)
         sales = await ebay_api_sold_search(keyword, country_cfg)
         if not sales["reject_reason"]:
             fetch_method = "ebay_api"
-            print(f"[BOT]   eBay API success!", file=sys.stderr)
         else:
             print(f"[BOT]   eBay API: {sales['reject_reason']}", file=sys.stderr)
             sales = None
 
-    # ── OPTION 1/2/3: Scrape via proxy/scraperapi/tor ─────────────────
+    # ── Fallback: scrape ─────────────────────────────────────────
     if sales is None:
         sold_url = build_ebay_sold_url(keyword, base_url)
         html     = await fetch_page_with_retry(playwright, sold_url, country_cfg)
@@ -860,29 +849,29 @@ async def scrape_country(keyword: str, country_cfg: dict, playwright) -> list:
         elif USE_TOR:
             fetch_method = "tor"
         else:
-            fetch_method = "direct_no_proxy"
+            fetch_method = "direct"
 
     if sales["reject_reason"]:
         print(f"[BOT]   REJECT ({country}): {sales['reject_reason']}", file=sys.stderr)
         return []
 
-    # ── Validate weekly pattern ────────────────────────────────────────
+    # ── Validate weekly pattern ───────────────────────────────────
     valid, reason = validate_weekly_sales(sales["weeks"])
     if not valid:
         print(f"[BOT]   REJECT ({country}): {reason}", file=sys.stderr)
         return []
 
-    # ── Get active competition count ───────────────────────────────────
+    # ── Competition count ─────────────────────────────────────────
     active_url  = build_ebay_active_url(keyword, base_url)
     active_html = await fetch_page_with_retry(playwright, active_url, country_cfg, max_retries=2)
     active      = parse_active_count(active_html)
     comp        = competition_label(active)
 
     if active > MAX_ACTIVE_LISTINGS:
-        print(f"[BOT]   REJECT ({country}): {active} active listings", file=sys.stderr)
+        print(f"[BOT]   REJECT ({country}): {active} active listings (too saturated)", file=sys.stderr)
         return []
 
-    # ── Get product items ──────────────────────────────────────────────
+    # ── Get individual product items ──────────────────────────────
     sold_url  = build_ebay_sold_url(keyword, base_url)
     sold_html = await fetch_page_with_retry(playwright, sold_url, country_cfg)
     items     = parse_items_from_html(sold_html, country, currency)
@@ -891,9 +880,7 @@ async def scrape_country(keyword: str, country_cfg: dict, playwright) -> list:
         print(f"[BOT]   No items parsed ({country})", file=sys.stderr)
         return []
 
-    # ── Build results ──────────────────────────────────────────────────
-    weeks_str = "/".join(str(w) for w in sales["weeks"])
-    avg_week  = round(sales["per_week_avg"], 1)
+    avg_week = round(sales["per_week_avg"], 1)
 
     for item in items[:PRODUCTS_PER_COUNTRY]:
         if is_branded(item["title"]):
@@ -901,65 +888,95 @@ async def scrape_country(keyword: str, country_cfg: dict, playwright) -> list:
 
         ebay_price = item["price"]
         sold_price = sales["sold_price"] if sales["sold_price"] > 0 else ebay_price
-        # Placeholder profit (ali_price not yet scraped)
-        profit     = round(sold_price * 0.3, 2)  # rough 30% estimate until Ali integrated
 
-        ali_url  = (
-            f"https://www.aliexpress.com/wholesale"
-            f"?SearchText={quote_plus(item['title'])}"
-            f"&shipCountry={country_cfg['ali_ship_param']}&isFreeShip=y"
-        )
+        # AliExpress matching
+        ali        = estimate_ali_price(sold_price, currency)
+        ali_url    = build_aliexpress_url(item["title"], country_cfg["ali_ship_param"])
+        profit     = calculate_profit(sold_price, currency, ali["cost_usd"], ali["shipping_usd"])
 
-        results.append(asdict(ProductResult(
-            title             = item["title"],
-            country           = country,
-            currency          = currency,
-            ebaySoldPrice     = sold_price,
-            ebayListPrice     = ebay_price,
-            soldPerWeek       = avg_week,
-            totalSoldMonth    = sales["total"],
-            weeklyBreakdown   = sales["weeks"],
-            weeklyConsistency = weeks_str,
-            activeListings    = active,
-            competitionLevel  = comp,
-            profit            = profit,
-            ebayUrl           = build_ebay_sold_url(item["title"], base_url),
-            aliexpressUrl     = ali_url,
-            ebayItemUrl       = item["url"],
-            whyGoodProduct    = (
-                f"{avg_week} sales/wk · {comp} competition · "
-                f"{sales['total']} sold/month"
-            ),
-            fetchMethod       = fetch_method,
-        )))
+        # Only include if margin is positive after all fees
+        if profit["profitMargin"] <= 0:
+            continue
+
+        # ── Build frontend-compatible dict ────────────────────────
+        result = {
+            "productName": item["title"],
+            "ebay": {
+                "price":           round(sold_price, 2),
+                "weeklySales":     avg_week,
+                "soldCount":       sales["total"],
+                "weeklyBreakdown": sales["weeks"],
+                "rating":          round(item.get("rating", 4.5), 1),
+                "shippingCountry": country,
+                "currency":        currency,
+                "activeListings":  active,
+                "competitionLevel": comp,
+                "productLink":     item["url"],
+                "searchLink":      build_ebay_sold_url(item["title"], base_url),
+            },
+            "aliexpress": {
+                "cost":          round(ali["cost_usd"], 2),
+                "shipping":      ali["shipping_usd"],
+                "deliveryTime":  ali["delivery_time"],
+                "rating":        ali["rating"],
+                "matchedTitle":  item["title"],
+                "isEstimated":   ali["is_estimated"],
+                "productLink":   ali_url,
+            },
+            "analysis": {
+                "totalCost":    profit["totalCost"],
+                "profit":       profit["profit"],
+                "profitMargin": profit["profitMargin"],
+                "fetchMethod":  fetch_method,
+            },
+        }
+
+        results.append(result)
 
     print(f"[BOT]   {country}: {len(results)} products found via {fetch_method}", file=sys.stderr)
     return results
 
 
 # ─────────────────────────────────────────────────────────────────
-# ENTRY POINT
+# RESOLVE COUNTRY → LIST OF PLATFORM CONFIGS
 # ─────────────────────────────────────────────────────────────────
 
-async def main(keyword: str):
-    if not PLAYWRIGHT_AVAILABLE:
-        print(json.dumps({"error": "Run: pip install playwright && playwright install chromium"}))
-        return
+def resolve_platforms(country: str) -> list:
+    key = COUNTRY_ALIASES.get(country.upper(), "UK")
+    if key == "ALL":
+        return list(EBAY_PLATFORMS.values())
+    cfg = EBAY_PLATFORMS.get(key)
+    return [cfg] if cfg else [EBAY_PLATFORMS["UK"]]
 
-    # Show config summary
-    print("\n[BOT] ━━━ Config ━━━", file=sys.stderr)
+
+# ─────────────────────────────────────────────────────────────────
+# MAIN ASYNC RUNNER
+# ─────────────────────────────────────────────────────────────────
+
+async def run_search_async(keyword: str, country: str = "UK") -> list:
+    """
+    Main entry point for the bot.
+    Returns list of frontend-compatible product dicts.
+    Called by app.py (Flask) or directly from CLI.
+    """
+    if not PLAYWRIGHT_AVAILABLE:
+        raise RuntimeError("Playwright not installed. Run: pip install playwright && playwright install chromium")
+
+    platforms = resolve_platforms(country)
+
+    print(f"\n[BOT] ━━━ Config ━━━", file=sys.stderr)
+    print(f"[BOT] Keyword:    {keyword}", file=sys.stderr)
+    print(f"[BOT] Country:    {country} → {[p['name'] for p in platforms]}", file=sys.stderr)
     print(f"[BOT] ScraperAPI: {'✅ ' + SCRAPER_API_KEY[:8] + '...' if SCRAPER_API_KEY else '❌ not set'}", file=sys.stderr)
     print(f"[BOT] eBay API:   {'✅ ' + EBAY_APP_ID[:8] + '...' if EBAY_APP_ID else '❌ not set'}", file=sys.stderr)
     print(f"[BOT] Tor:        {'✅' if USE_TOR else '❌'}", file=sys.stderr)
     print(f"[BOT] Free proxy: {'✅' if USE_FREE_PROXIES else '❌'}", file=sys.stderr)
-    if not any([SCRAPER_API_KEY, EBAY_APP_ID, USE_TOR, USE_FREE_PROXIES]):
-        print("[BOT] ⚠️  No proxy/API configured — location will be Pakistan!", file=sys.stderr)
     print("[BOT] ━━━━━━━━━━━━━\n", file=sys.stderr)
 
     all_results = []
 
     async with async_playwright() as pw:
-        for cfg in EBAY_COUNTRIES:
+        for cfg in platforms:
             try:
                 res = await scrape_country(keyword, cfg, pw)
                 all_results.extend(res)
@@ -967,13 +984,34 @@ async def main(keyword: str):
                 print(f"[BOT] Country error ({cfg['name']}): {e}", file=sys.stderr)
                 traceback.print_exc(file=sys.stderr)
 
-    all_results.sort(key=lambda x: x.get("soldPerWeek", 0), reverse=True)
+    # Sort by profitMargin descending
+    all_results.sort(key=lambda x: x["analysis"].get("profitMargin", 0), reverse=True)
 
-    print(json.dumps({"keyword": keyword, "products": all_results}, ensure_ascii=False, indent=2))
+    return all_results
 
+
+def run_search(keyword: str, country: str = "UK") -> list:
+    """
+    Synchronous wrapper for Flask/Django integration.
+    Usage in app.py:
+        from ebay_bot import run_search
+        products = run_search("phone stand", "UK")
+    """
+    return asyncio.run(run_search_async(keyword, country))
+
+
+# ─────────────────────────────────────────────────────────────────
+# CLI ENTRY POINT
+# ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python ebay_bot_v11.py \"keyword\"")
+        print('Usage: python ebay_bot.py "keyword" [country]')
+        print('       country: UK, USA, DE, AU, IT, ALL  (default: UK)')
         sys.exit(1)
-    asyncio.run(main(sys.argv[1]))
+
+    kw      = sys.argv[1]
+    country = sys.argv[2] if len(sys.argv) > 2 else "UK"
+
+    results = asyncio.run(run_search_async(kw, country))
+    print(json.dumps({"keyword": kw, "country": country, "products": results}, ensure_ascii=False, indent=2))
