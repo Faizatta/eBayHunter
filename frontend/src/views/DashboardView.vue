@@ -266,7 +266,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import Sidebar from '../components/Sidebar.vue'
-import api from '../services/api'
+import api from '@/services/api'
 
 const keyword     = ref('')
 const country     = ref('UK')
