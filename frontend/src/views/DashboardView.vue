@@ -2,16 +2,14 @@
   <div class="p-6 max-w-7xl mx-auto">
 
     <div class="mb-7">
-      <h1 class="text-2xl font-display font-bold text-zinc-100">Product Search
-        
-      </h1>
+      <h1 class="text-2xl font-display font-bold text-zinc-100">Product Search</h1>
       <div class="flex items-center gap-2 mt-1.5 mb-1">
         <img src="https://flagcdn.com/w40/de.png" alt="Germany"   class="w-6 h-4 rounded-sm object-cover" />
         <img src="https://flagcdn.com/w40/gb.png" alt="UK"        class="w-6 h-4 rounded-sm object-cover" />
         <img src="https://flagcdn.com/w40/it.png" alt="Italy"     class="w-6 h-4 rounded-sm object-cover" />
         <img src="https://flagcdn.com/w40/au.png" alt="Australia" class="w-6 h-4 rounded-sm object-cover" />
       </div>
-      <p class="text-zinc-500 text-sm mt-1">Find profitable eBay products with AliExpress sourcing — v9 strict rules</p>
+      <p class="text-zinc-500 text-sm mt-1">Find profitable eBay products with AliExpress sourcing</p>
     </div>
 
     <!-- Stats row -->
@@ -35,14 +33,6 @@
         </div>
       </div>
     </div>
-
-    <!-- v9 rules notice -->
-    <div class="card p-3 mb-4 border border-brand-500/20 bg-brand-500/5 flex items-start gap-2.5">
-      <svg class="w-4 h-4 text-brand-400 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-          d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
-      </svg>
- 
 
     <!-- Search box -->
     <div class="card p-5 mb-6">
@@ -129,9 +119,8 @@
             class="bg-zinc-800 border border-zinc-700 text-zinc-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-brand-500">
             <option value="profit">Profit ↓</option>
             <option value="margin">Margin ↓</option>
-            <option value="price">eBay Sold ↑</option>
+            <option value="price">eBay Price ↑</option>
             <option value="sold">Sales/wk ↓</option>
-            <option value="aliReviews">Ali Reviews ↓</option>
           </select>
 
           <button @click="exportCSV" class="btn-secondary">
@@ -164,9 +153,6 @@
         <span class="text-xs px-3 py-1.5 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 font-display">
           🔴 High: <span class="font-semibold ml-1">{{ highCompCount }}</span>
         </span>
-        <span class="text-xs px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-display">
-          ✅ Country matched: <span class="font-semibold ml-1">{{ matchedCount }}/{{ sortedResults.length }}</span>
-        </span>
       </div>
 
       <!-- Table -->
@@ -177,44 +163,13 @@
               <th class="w-8">#</th>
               <th>Product</th>
               <th>Country</th>
-              <!-- Pricing group -->
-              <th>
-                <span class="flex items-center gap-1">
-                  eBay Sold
-                  <span class="text-zinc-600 font-normal text-xs">(avg)</span>
-                </span>
-              </th>
-              <th>eBay Listed</th>
-              <th>eBay Lowest</th>
-              <th>Ali Price</th>
-              <th>Ali Ship</th>
-              <!-- Profit -->
-              <th>
-                <span class="flex items-center gap-1">
-                  Profit
-                  <span class="text-zinc-600 font-normal text-xs">(sold−ali−ship)</span>
-                </span>
-              </th>
+              <th>eBay Price</th>
+              <th>AliExpress</th>
+              <th>Profit</th>
               <th>Margin</th>
-              <!-- Sales -->
-              <th>Sales/wk</th>
-              <th>Weekly</th>
-              <th>30d Total</th>
-              <!-- Ratings -->
-              <th>eBay ★</th>
-              <th>Ali ★</th>
-              <th>Ali Reviews</th>
-              <!-- Logistics -->
-              <th>Ali Ships From</th>
-              <th>🌍 Match</th>
-              <th>Delivery</th>
-              <th>Free Ship</th>
-              <!-- Competition -->
-              <th>Competition</th>
-              <th>Active Listings</th>
-              <!-- Why good -->
-              <th>Why Good</th>
-              <!-- Links -->
+              <th>Sold/wk</th>
+              <th>Reviews</th>
+              <th>Shipping</th>
               <th>Links</th>
             </tr>
           </thead>
@@ -223,46 +178,22 @@
 
               <td class="text-zinc-600 text-xs font-mono">{{ i + 1 }}</td>
 
-              <!-- Product title + delivery hint -->
+              <!-- Product title -->
               <td class="max-w-xs">
                 <p class="text-zinc-200 font-medium text-sm line-clamp-2 leading-snug">{{ p.title || '—' }}</p>
               </td>
 
-              <!-- Country + local shipping flag -->
+              <!-- Country -->
               <td>
-                <div class="flex flex-col gap-1">
-                  <span class="flex items-center gap-1.5 text-sm text-zinc-400 whitespace-nowrap">
-                    <span>{{ flagFor(p.country) }}</span>{{ p.country }}
-                  </span>
-                  <span v-if="p.localShipping"
-                    class="text-xs text-emerald-400 font-display flex items-center gap-1">
-                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                    </svg>
-                    Local
-                  </span>
-                  <span v-else class="text-xs text-zinc-600 font-display">Intl.</span>
-                </div>
+                <span class="flex items-center gap-1.5 text-sm text-zinc-400 whitespace-nowrap">
+                  <span>{{ flagFor(p.country) }}</span>{{ p.country }}
+                </span>
               </td>
 
-              <!-- eBay Sold Price (used in profit formula) -->
+              <!-- eBay Price (sold avg) -->
               <td>
                 <span class="font-mono text-blue-300 text-sm whitespace-nowrap font-semibold">
-                  {{ currencySymbol(p.currency) }}{{ fmt(p.ebaySoldPrice) }}
-                </span>
-              </td>
-
-              <!-- eBay Listed Price (current listing price) -->
-              <td>
-                <span class="font-mono text-zinc-400 text-sm whitespace-nowrap">
-                  {{ currencySymbol(p.currency) }}{{ fmt(p.ebayPrice) }}
-                </span>
-              </td>
-
-              <!-- eBay Lowest Active Price -->
-              <td>
-                <span class="font-mono text-zinc-400 text-sm whitespace-nowrap">
-                  {{ currencySymbol(p.currency) }}{{ fmt(p.ebayLowestPrice) }}
+                  {{ currencySymbol(p.currency) }}{{ fmt(p.ebaySoldPrice || p.ebayPrice) }}
                 </span>
               </td>
 
@@ -273,7 +204,44 @@
                 </span>
               </td>
 
-              <!-- AliExpress Shipping Cost -->
+              <!-- Profit -->
+              <td>
+                <span
+                  :class="p.profit >= PREFERRED_MIN_PROFIT
+                    ? 'profit-positive'
+                    : p.profit > 0
+                      ? 'text-amber-400 font-mono font-semibold'
+                      : 'profit-negative'"
+                  class="whitespace-nowrap text-sm">
+                  {{ p.profit >= 0 ? '+' : '' }}{{ currencySymbol(p.currency) }}{{ fmt(p.profit) }}
+                </span>
+              </td>
+
+              <!-- Margin % -->
+              <td>
+                <span class="text-sm font-mono font-semibold"
+                  :class="p.profitMarginPct >= 20 ? 'text-emerald-400' : p.profitMarginPct > 0 ? 'text-amber-400' : 'text-red-400'">
+                  {{ fmt(p.profitMarginPct, 1) }}%
+                </span>
+              </td>
+
+              <!-- Sales / week -->
+              <td>
+                <span class="text-emerald-400 font-mono text-sm font-medium">{{ p.soldPerWeek }}</span>
+                <span class="text-zinc-600 text-xs font-display">/wk</span>
+              </td>
+
+              <!-- Ali Reviews -->
+              <td>
+                <span v-if="p.aliReviews > 0"
+                  :class="p.aliReviews >= 50 ? 'text-emerald-400' : p.aliReviews >= 10 ? 'text-zinc-400' : 'text-amber-400'"
+                  class="text-sm font-mono">
+                  {{ p.aliReviews }}
+                </span>
+                <span v-else class="text-zinc-700 text-xs">—</span>
+              </td>
+
+              <!-- Shipping -->
               <td>
                 <span v-if="p.freeShipping || p.aliShippingCost === 0"
                   class="flex items-center gap-1 text-emerald-400 text-xs font-display whitespace-nowrap">
@@ -287,159 +255,18 @@
                 </span>
               </td>
 
-              <!-- PROFIT = ebaySoldPrice − aliexpressPrice − aliShippingCost -->
-              <td>
-                <span :class="p.profit >= PREFERRED_MIN_PROFIT ? 'profit-positive' : p.profit > 0 ? 'text-amber-400 font-mono font-semibold' : 'profit-negative'"
-                  class="whitespace-nowrap text-sm">
-                  {{ p.profit >= 0 ? '+' : '' }}{{ currencySymbol(p.currency) }}{{ fmt(p.profit) }}
-                </span>
-                <!-- Formula breakdown -->
-                <div class="text-xs text-zinc-600 font-mono mt-0.5 leading-tight whitespace-nowrap">
-                  {{ fmt(p.ebaySoldPrice) }}−{{ fmt(p.aliexpressPrice) }}−{{ fmt(p.aliShippingCost) }}
-                </div>
-              </td>
-
-              <!-- Margin % -->
-              <td>
-                <span class="text-xs font-mono font-semibold"
-                  :class="p.profitMarginPct >= 20 ? 'text-emerald-400' : p.profitMarginPct > 0 ? 'text-amber-400' : 'text-red-400'">
-                  {{ fmt(p.profitMarginPct, 1) }}%
-                </span>
-              </td>
-
-              <!-- Sales / week (avg from bot weekly logic) -->
-              <td>
-                <span class="text-emerald-400 font-mono text-sm font-medium">{{ p.soldPerWeek }}</span>
-                <span class="text-zinc-600 text-xs font-display">/wk</span>
-              </td>
-
-              <!-- Weekly mini-bar chart (weeklyBreakdown array → "w0/w1/w2/w3") -->
-              <td>
-                <div v-if="weekBars(p).length" class="flex items-end gap-1 h-6">
-                  <div v-for="(w, wi) in weekBars(p)" :key="wi"
-                    class="w-2.5 rounded-sm bg-brand-500/60 min-h-[3px]"
-                    :style="{ height: barHeight(w, weekBars(p)) }"
-                    :title="`Week ${wi + 1}: ${w} sold`" />
-                </div>
-                <span v-else class="text-zinc-700 text-xs">—</span>
-              </td>
-
-              <!-- Total sold in 30d -->
-              <td>
-                <span class="font-mono text-zinc-400 text-sm">{{ p.totalSoldMonth }}</span>
-                <span class="text-zinc-600 text-xs font-display">/30d</span>
-              </td>
-
-              <!-- eBay seller rating -->
-              <td>
-                <span v-if="p.ebayRating > 0" class="flex items-center gap-1 text-amber-400 text-sm font-mono">
-                  ★ {{ fmt(p.ebayRating, 1) }}
-                </span>
-                <span v-else class="text-zinc-700 text-xs">—</span>
-              </td>
-
-              <!-- AliExpress rating -->
-              <td>
-                <span v-if="p.aliRating > 0" class="flex items-center gap-1 text-amber-400 text-sm font-mono">
-                  ★ {{ fmt(p.aliRating, 1) }}
-                </span>
-                <span v-else class="text-zinc-700 text-xs">—</span>
-              </td>
-
-              <!-- AliExpress review count -->
-              <td>
-                <span v-if="p.aliReviews > 0"
-                  :class="p.aliReviews >= 50 ? 'text-emerald-400' : p.aliReviews >= 4 ? 'text-zinc-400' : 'text-amber-400'"
-                  class="text-sm font-mono">
-                  {{ p.aliReviews }}
-                </span>
-                <span v-else class="text-zinc-700 text-xs">—</span>
-              </td>
-
-              <!-- AliExpress Ship-From Country (must match eBay country) -->
-              <td>
-                <span class="text-xs font-display whitespace-nowrap"
-                  :class="isChina(p.aliShipCountry) ? 'text-red-400' : 'text-zinc-300'">
-                  {{ p.aliShipCountry || '—' }}
-                </span>
-              </td>
-
-              <!-- Country Match Badge (STRICT v9 — China always rejected) -->
-              <td>
-                <span v-if="p.countryMatch"
-                  class="flex items-center gap-1 text-emerald-400 text-xs font-display font-semibold whitespace-nowrap bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded-full">
-                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                  </svg>
-                  Match
-                </span>
-                <span v-else
-                  class="flex items-center gap-1 text-red-400 text-xs font-display font-semibold whitespace-nowrap bg-red-500/10 border border-red-500/20 px-2 py-1 rounded-full">
-                  ✗ Mismatch
-                </span>
-              </td>
-
-              <!-- Delivery window -->
-              <td>
-                <span class="text-xs text-zinc-400 font-display whitespace-nowrap">
-                  {{ p.deliveryDays || '—' }}
-                </span>
-              </td>
-
-              <!-- Free shipping flag -->
-              <td>
-                <span v-if="p.freeShipping"
-                  class="text-xs text-emerald-400 font-display flex items-center gap-1 whitespace-nowrap">
-                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                  </svg>
-                  Free
-                </span>
-                <span v-else class="text-zinc-600 text-xs font-display">Paid</span>
-              </td>
-
-              <!-- Competition level -->
-              <td>
-                <span :class="compBadgeClass(p.competitionLevel)"
-                  class="text-xs font-display font-semibold px-2.5 py-1 rounded-full whitespace-nowrap">
-                  {{ compIcon(p.competitionLevel) }} {{ p.competitionLevel }}
-                </span>
-              </td>
-
-              <!-- Active listing count -->
-              <td>
-                <span :class="p.activeListings > 500 ? 'text-red-400' : p.activeListings > 200 ? 'text-amber-400' : 'text-zinc-400'"
-                  class="text-sm font-mono">
-                  {{ p.activeListings }}
-                </span>
-              </td>
-
-              <!-- whyGoodProduct (from bot) -->
-              <td class="max-w-[180px]">
-                <p class="text-xs text-zinc-400 line-clamp-2 leading-snug">{{ p.whyGoodProduct || '—' }}</p>
-              </td>
-
-              <!-- Links: 4 possible URLs from bot -->
+              <!-- Links -->
               <td>
                 <div class="flex flex-col gap-1.5">
-                  <!-- Prefer direct item URL, fall back to filtered search URL -->
                   <a :href="p.ebayItemUrl || p.ebayUrl" target="_blank" rel="noopener noreferrer"
-                    :title="p.ebayItemUrl ? 'Direct eBay item' : 'eBay SOLD search (filtered)'"
-                    class="text-xs bg-zinc-800 hover:bg-brand-500/20 hover:text-brand-400 border border-zinc-700 hover:border-brand-500/30 text-zinc-300 px-2.5 py-1 rounded-lg transition-all font-display text-center flex items-center justify-center gap-1">
-                    eBay
-                    <span v-if="p.ebayItemUrl" class="text-brand-500 text-xs">•</span>
-                    <span v-else class="text-zinc-600 text-xs">↗</span>
+                    class="text-xs bg-zinc-800 hover:bg-brand-500/20 hover:text-brand-400 border border-zinc-700 hover:border-brand-500/30 text-zinc-300 px-2.5 py-1 rounded-lg transition-all font-display text-center">
+                    eBay ↗
                   </a>
                   <a :href="p.aliItemUrl || p.aliexpressUrl" target="_blank" rel="noopener noreferrer"
-                    :title="p.aliItemUrl ? 'Direct AliExpress item' : 'AliExpress local ship search (filtered)'"
-                    class="text-xs bg-zinc-800 hover:bg-orange-500/20 hover:text-orange-400 border border-zinc-700 hover:border-orange-500/30 text-zinc-300 px-2.5 py-1 rounded-lg transition-all font-display text-center flex items-center justify-center gap-1">
-                    Ali
-                    <span v-if="p.aliItemUrl" class="text-orange-500 text-xs">•</span>
-                    <span v-else class="text-zinc-600 text-xs">↗</span>
+                    class="text-xs bg-zinc-800 hover:bg-orange-500/20 hover:text-orange-400 border border-zinc-700 hover:border-orange-500/30 text-zinc-300 px-2.5 py-1 rounded-lg transition-all font-display text-center">
+                    Ali ↗
                   </a>
                 </div>
-                <!-- Dot legend: filled dot = direct item link, ↗ = filtered search -->
-                <p class="text-zinc-700 text-xs mt-1 text-center">{{ p.ebayItemUrl || p.aliItemUrl ? '• = item' : '' }}</p>
               </td>
 
             </tr>
@@ -448,7 +275,7 @@
 
         <div class="px-6 py-3 border-t border-zinc-800 text-xs text-zinc-500 font-display">
           Showing {{ sortedResults.length }} of {{ results.length }} products ·
-          SOLD listings only · each week ≥ 10 sales · 4★+ · no China shipping · country match verified
+          SOLD listings only · last 30 days · each week ≥ 10 sales
         </div>
       </div>
     </div>
@@ -463,8 +290,7 @@
       </div>
       <p class="font-display font-semibold text-zinc-300">No products found</p>
       <p class="text-zinc-500 text-sm mt-1">
-        v9 strict rules rejected all candidates — try a different keyword.<br/>
-        Common reasons: China-only AliExpress supplier, weekly sales out of 10–50 range, title mismatch, or profit ≤ 0.
+        Try a different keyword. Common reasons: weekly sales out of range, no recent sold data, or profit ≤ 0.
       </p>
     </div>
 
@@ -478,7 +304,7 @@
       </div>
       <p class="font-display font-semibold text-zinc-300">Enter a keyword to start hunting</p>
       <p class="text-zinc-500 text-sm mt-1">
-        Searches eBay SOLD listings across 4 countries — returns only products with matching eBay + AliExpress ship-from country (China always rejected).
+        Searches eBay SOLD listings across 4 countries — last 30 days only, products with consistent weekly sales.
       </p>
     </div>
 
@@ -492,12 +318,10 @@ import api from '../api'
 
 const auth = useAuthStore()
 
-// ── Constants mirrored from bot config ────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────
 const PREFERRED_MIN_PROFIT = 5.0
-const CHINA_SIGNALS = ['cn', 'china', 'zh', 'shenzhen', 'guangzhou', 'hangzhou',
-                       'yiwu', 'beijing', 'shanghai', 'hong kong', 'tw', 'taiwan']
 
-// ── State ─────────────────────────────────────────────────────────
+// ── State ──────────────────────────────────────────────────────────
 const keyword        = ref('')
 const lastKeyword    = ref('')
 const results        = ref([])
@@ -518,7 +342,7 @@ const countries = [
 const countryFlags = Object.fromEntries(countries.map(c => [c.name, c.flag]))
 function flagFor(name) { return countryFlags[name] ?? '🌐' }
 
-// ── Helpers ───────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────
 function fmt(val, decimals = 2) {
   const n = parseFloat(val)
   return isNaN(n) ? (0).toFixed(decimals) : n.toFixed(decimals)
@@ -529,117 +353,40 @@ function currencySymbol(currency) {
   return map[currency] ?? (currency ? currency + ' ' : '')
 }
 
-function isChina(shipCountry) {
-  if (!shipCountry) return false
-  const s = shipCountry.toLowerCase()
-  return CHINA_SIGNALS.some(sig => s.includes(sig))
-}
-
-// ── Weekly bars — bot sends weeklyBreakdown as list OR
-//    weeklyConsistency as "12/15/10/8" string ───────────────────────
-function weekBars(p) {
-  // Prefer the actual weeklyBreakdown array the bot sends
-  if (Array.isArray(p.weeklyBreakdown) && p.weeklyBreakdown.length) {
-    return p.weeklyBreakdown.map(Number)
-  }
-  // Fall back to weeklyConsistency string "12/15/10/8"
-  if (p.weeklyConsistency) {
-    return p.weeklyConsistency.split('/').map(s => parseInt(s.trim()) || 0)
-  }
-  return []
-}
-
-function barHeight(w, weeks) {
-  const mx = Math.max(...weeks, 1)
-  return Math.max(3, Math.round((w / mx) * 24)) + 'px'
-}
-
-// ── Competition badge ─────────────────────────────────────────────
-function compBadgeClass(level) {
-  return {
-    low:    'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20',
-    medium: 'bg-amber-500/15 text-amber-400 border border-amber-500/20',
-    high:   'bg-red-500/15 text-red-400 border border-red-500/20',
-  }[level] ?? 'bg-zinc-800 text-zinc-400 border border-zinc-700'
-}
-function compIcon(level) {
-  return { low: '🟢', medium: '🟡', high: '🔴' }[level] ?? '⚪'
-}
-
-// ── Normalise — maps ALL ProductResult fields (v9 dataclass) ─────
-//    Handles both snake_case (Python JSON default) and camelCase.
+// ── Normalise API response ─────────────────────────────────────────
 function normalise(p) {
-  // Core prices
-  const ebayPrice       = parseFloat(p.ebayPrice       ?? p.EbayPrice)       || 0
-  const ebayLowestPrice = parseFloat(p.ebayLowestPrice ?? p.EbayLowestPrice) || 0
-  const ebaySoldPrice   = parseFloat(p.ebaySoldPrice   ?? p.EbaySoldPrice)   || 0
-  const aliPrice        = parseFloat(p.aliexpressPrice ?? p.AliexpressPrice)  || 0
-  const aliShip         = parseFloat(p.aliShippingCost ?? p.AliShippingCost)  || 0
+  const ebayPrice     = parseFloat(p.ebayPrice     ?? p.EbayPrice)     || 0
+  const ebaySoldPrice = parseFloat(p.ebaySoldPrice ?? p.EbaySoldPrice) || 0
+  const aliPrice      = parseFloat(p.aliexpressPrice ?? p.AliexpressPrice) || 0
+  const aliShip       = parseFloat(p.aliShippingCost ?? p.AliShippingCost) || 0
 
-  // Profit: use bot value, recompute as fallback
   const profit = parseFloat(p.profit ?? p.Profit)
-                 ?? parseFloat((ebaySoldPrice - aliPrice - aliShip).toFixed(2))
+    ?? parseFloat((ebaySoldPrice - aliPrice - aliShip).toFixed(2))
   const margin = parseFloat(p.profitMarginPct ?? p.ProfitMarginPct)
-                 ?? (ebaySoldPrice > 0 ? parseFloat(((profit / ebaySoldPrice) * 100).toFixed(1)) : 0)
-
-  // Weekly breakdown: bot sends list in weeklyBreakdown field
-  const weeklyBreakdown = p.weeklyBreakdown ?? p.WeeklyBreakdown ?? []
-
-  // Weekly consistency: "w0/w1/w2/w3" string (legacy or summary)
-  const weeklyConsistency = p.weeklyConsistency ?? p.WeeklyConsistency ?? ''
+    ?? (ebaySoldPrice > 0 ? parseFloat(((profit / ebaySoldPrice) * 100).toFixed(1)) : 0)
 
   return {
-    // Identity
-    title:             p.title             ?? p.Title             ?? '',
-    country:           p.country           ?? p.Country           ?? '',
-    currency:          p.currency          ?? p.Currency          ?? 'GBP',
-
-    // eBay prices (3 distinct values from bot)
+    title:            p.title            ?? p.Title            ?? '',
+    country:          p.country          ?? p.Country          ?? '',
+    currency:         p.currency         ?? p.Currency         ?? 'GBP',
     ebayPrice,
-    ebayLowestPrice,
     ebaySoldPrice,
-    ebayRating:        parseFloat(p.ebayRating    ?? p.EbayRating)    || 0,
-
-    // AliExpress prices
-    aliexpressPrice:   aliPrice,
-    aliShippingCost:   aliShip,
-    aliRating:         parseFloat(p.aliRating     ?? p.AliRating)     || 0,
-    aliReviews:        parseInt  (p.aliReviews    ?? p.AliReviews)    || 0,
-    aliShipCountry:    p.aliShipCountry    ?? p.AliShipCountry    ?? '',
-
-    // Profit
-    profit:            isNaN(profit) ? 0 : profit,
-    profitMarginPct:   isNaN(margin) ? 0 : margin,
-
-    // Sales data (from bot's validate_weekly_sales + get_current_month_sales)
-    soldPerWeek:       parseInt(p.soldPerWeek    ?? p.SoldPerWeek)    || 0,
-    weeklyBreakdown,          // list [w0, w1, w2, w3] — direct from bot
-    totalSoldMonth:    parseInt(p.totalSoldMonth ?? p.TotalSoldMonth) || 0,
-    weeklyConsistency,        // "12/15/10/8" string fallback
-
-    // Competition
-    competitionLevel:  p.competitionLevel  ?? p.CompetitionLevel  ?? 'medium',
-    activeListings:    parseInt(p.activeListings ?? p.ActiveListings) || 0,
-
-    // Logistics flags
-    freeShipping:      p.freeShipping  ?? p.FreeShipping  ?? false,
-    localShipping:     p.localShipping ?? p.LocalShipping ?? false,
-    countryMatch:      p.countryMatch  ?? p.CountryMatch  ?? false,
-    deliveryDays:      p.deliveryDays  ?? p.DeliveryDays  ?? '',
-
-    // URLs — v9 sends 4 distinct URL fields
-    ebayUrl:          p.ebayUrl      ?? p.EbayUrl      ?? '#',  // filtered SOLD search
-    aliexpressUrl:    p.aliexpressUrl ?? p.AliexpressUrl ?? '#', // filtered Ali search
-    ebayItemUrl:      p.ebayItemUrl  ?? p.EbayItemUrl  ?? '',   // direct item (if found)
-    aliItemUrl:       p.aliItemUrl   ?? p.AliItemUrl   ?? '',   // direct Ali item (if found)
-
-    // Bot reasoning fields
-    whyGoodProduct:   p.whyGoodProduct  ?? p.WhyGoodProduct  ?? '',
-    rejectionReason:  p.rejectionReason ?? p.RejectionReason ?? '', // not shown in table (rejected items filtered out)
+    aliexpressPrice:  aliPrice,
+    aliShippingCost:  aliShip,
+    aliReviews:       parseInt(p.aliReviews ?? p.AliReviews) || 0,
+    profit:           isNaN(profit) ? 0 : profit,
+    profitMarginPct:  isNaN(margin) ? 0 : margin,
+    soldPerWeek:      parseInt(p.soldPerWeek ?? p.SoldPerWeek) || 0,
+    freeShipping:     p.freeShipping ?? p.FreeShipping ?? false,
+    competitionLevel: p.competitionLevel ?? p.CompetitionLevel ?? 'medium',
+    ebayUrl:          p.ebayUrl     ?? p.EbayUrl     ?? '#',
+    aliexpressUrl:    p.aliexpressUrl ?? p.AliexpressUrl ?? '#',
+    ebayItemUrl:      p.ebayItemUrl ?? p.EbayItemUrl ?? '',
+    aliItemUrl:       p.aliItemUrl  ?? p.AliItemUrl  ?? '',
   }
 }
 
-// ── Summary stats ─────────────────────────────────────────────────
+// ── Summary stats ──────────────────────────────────────────────────
 const avgProfit = computed(() => {
   const r = sortedResults.value
   if (!r.length) return '—'
@@ -660,26 +407,24 @@ const avgSales = computed(() => {
 const lowCompCount  = computed(() => sortedResults.value.filter(p => p.competitionLevel === 'low').length)
 const medCompCount  = computed(() => sortedResults.value.filter(p => p.competitionLevel === 'medium').length)
 const highCompCount = computed(() => sortedResults.value.filter(p => p.competitionLevel === 'high').length)
-const matchedCount  = computed(() => sortedResults.value.filter(p => p.countryMatch).length)
 
 const resultCountries = computed(() =>
   [...new Set(results.value.map(p => p.country))].sort()
 )
 
-// ── Filtered + sorted results ─────────────────────────────────────
+// ── Filtered + sorted results ──────────────────────────────────────
 const sortedResults = computed(() => {
   let r = [...results.value]
   if (filterCountry.value) r = r.filter(p => p.country === filterCountry.value)
   if (filterComp.value)    r = r.filter(p => p.competitionLevel === filterComp.value)
-  if (sortBy.value === 'profit')     r.sort((a, b) => b.profit - a.profit)
-  if (sortBy.value === 'margin')     r.sort((a, b) => (b.profitMarginPct || 0) - (a.profitMarginPct || 0))
-  if (sortBy.value === 'price')      r.sort((a, b) => a.ebaySoldPrice - b.ebaySoldPrice)
-  if (sortBy.value === 'sold')       r.sort((a, b) => b.soldPerWeek - a.soldPerWeek)
-  if (sortBy.value === 'aliReviews') r.sort((a, b) => b.aliReviews - a.aliReviews)
+  if (sortBy.value === 'profit') r.sort((a, b) => b.profit - a.profit)
+  if (sortBy.value === 'margin') r.sort((a, b) => (b.profitMarginPct || 0) - (a.profitMarginPct || 0))
+  if (sortBy.value === 'price')  r.sort((a, b) => a.ebaySoldPrice - b.ebaySoldPrice)
+  if (sortBy.value === 'sold')   r.sort((a, b) => b.soldPerWeek - a.soldPerWeek)
   return r
 })
 
-// ── Country animation ─────────────────────────────────────────────
+// ── Country animation ──────────────────────────────────────────────
 let countryInterval = null
 function startCountryAnimation() {
   let idx = 0
@@ -694,7 +439,7 @@ function stopCountryAnimation() {
   currentCountry.value = ''
 }
 
-// ── Run search ────────────────────────────────────────────────────
+// ── Run search ─────────────────────────────────────────────────────
 async function runSearch() {
   if (!keyword.value.trim()) return
   loading.value       = true
@@ -723,23 +468,17 @@ async function runSearch() {
   }
 }
 
-// ── CSV export — all v9 ProductResult fields ──────────────────────
+// ── CSV export ─────────────────────────────────────────────────────
 function exportCSV() {
   const data = sortedResults.value
   if (!data.length) return
 
   const headers = [
     '#', 'Title', 'Country', 'Currency',
-    'eBay Listed', 'eBay Lowest', 'eBay Sold (Avg)', 'eBay Rating',
-    'Ali Price', 'Ali Shipping', 'Ali Rating', 'Ali Reviews',
-    'Ali Ships From', 'Country Match',
-    'PROFIT', 'MARGIN %',
-    'Sales/Week', 'Total (30d)', 'Weekly Breakdown', 'Weekly Consistency',
-    'Competition', 'Active Listings',
-    'Free Shipping', 'Local Shipping', 'Delivery',
-    'eBay Search URL', 'eBay Item URL',
-    'Ali Search URL',  'Ali Item URL',
-    'Why Good Product',
+    'eBay Price', 'AliExpress Price', 'Ali Shipping',
+    'Profit', 'Margin %', 'Sales/Week', 'Ali Reviews',
+    'Free Shipping', 'Competition',
+    'eBay URL', 'Ali URL',
   ]
 
   const escape = v => {
@@ -753,32 +492,17 @@ function exportCSV() {
     p.title,
     p.country,
     p.currency,
-    fmt(p.ebayPrice),
-    fmt(p.ebayLowestPrice),
-    fmt(p.ebaySoldPrice),
-    fmt(p.ebayRating, 1),
+    fmt(p.ebaySoldPrice || p.ebayPrice),
     fmt(p.aliexpressPrice),
     fmt(p.aliShippingCost),
-    p.aliRating > 0 ? fmt(p.aliRating, 1) : '',
-    p.aliReviews,
-    p.aliShipCountry,
-    p.countryMatch ? 'YES' : 'NO',
     fmt(p.profit),
     fmt(p.profitMarginPct, 1) + '%',
     p.soldPerWeek,
-    p.totalSoldMonth,
-    Array.isArray(p.weeklyBreakdown) ? p.weeklyBreakdown.join('/') : '',
-    p.weeklyConsistency,
+    p.aliReviews,
+    p.freeShipping ? 'Yes' : 'No',
     p.competitionLevel,
-    p.activeListings,
-    p.freeShipping  ? 'Yes' : 'No',
-    p.localShipping ? 'Yes' : 'No',
-    p.deliveryDays,
-    p.ebayUrl,
-    p.ebayItemUrl,
-    p.aliexpressUrl,
-    p.aliItemUrl,
-    p.whyGoodProduct,
+    p.ebayItemUrl || p.ebayUrl,
+    p.aliItemUrl  || p.aliexpressUrl,
   ].map(escape).join(','))
 
   const csv  = [headers.join(','), ...rows].join('\n')
@@ -787,7 +511,7 @@ function exportCSV() {
   const a    = document.createElement('a')
   const safe = lastKeyword.value.replace(/[^a-z0-9]/gi, '_').toLowerCase()
   a.href     = url
-  a.download = `ebay_v9_${safe}_${new Date().toISOString().slice(0, 10)}.csv`
+  a.download = `ebay_${safe}_${new Date().toISOString().slice(0, 10)}.csv`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
