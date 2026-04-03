@@ -85,36 +85,29 @@ async def apply_sold_filter(page, base_url: str, keyword: str) -> bool:
 # VERIFY sold pill "Sold items ×" is active after clicking
 # ─────────────────────────────────────────────────────────────────
 
-async def verify_sold_active(page) -> bool:
-    """
-    After clicking, confirm the 'Sold items ×' pill appears
-    AND green sold dates like 'Sold 5th Jan 2026' are on the page.
-    """
-    html = await page.content()
+async def apply_sold_filter(page, base_url: str, keyword: str) -> bool:
 
-    pill = await page.evaluate("""
-        () => [...document.querySelectorAll('*')].some(el =>
-            el.children.length <= 3 &&
-            el.textContent.trim().toLowerCase().includes('sold items')
-        )
-    """)
+    search_url = f"{base_url}/sch/i.html?_nkw={quote_plus(keyword)}&LH_BIN=1&LH_ItemCondition=1000"
+    await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
 
-    dates = bool(re.search(
-        r"Sold\s+\d{1,2}(?:st|nd|rd|th)?\s+\w+\s+\d{4}",
-        html, re.IGNORECASE
-    ))
+    await asyncio.sleep(3)
+    await page.evaluate("window.scrollTo(0, 500)")
+    await asyncio.sleep(1)
 
-    print(f"[BOT]   Pill: {pill} | Sold dates: {dates}", file=sys.stderr)
-    return pill or dates
+    try:
+        checkbox = page.locator('input[aria-label="Sold items"]')
+        await checkbox.wait_for(timeout=10000)
 
+        if not await checkbox.is_checked():
+            await checkbox.check()
 
-search_url = (
-    f"{base_url}/sch/i.html"
-    f"?_nkw={quote_plus(keyword)}"
-    f"&LH_Sold=1"
-    f"&LH_Complete=1"
-    f"&LH_BIN=1"
-    f"&LH_ItemCondition=1000"
-    f"&_ipg=240"
-    f"&_sop=13"
-)
+        print("[BOT] ✅ Sold filter applied", file=sys.stderr)
+
+        await page.wait_for_load_state("networkidle", timeout=20000)
+        await asyncio.sleep(2)
+
+        return True
+
+    except Exception as e:
+        print(f"[BOT] ❌ Failed to apply sold filter: {e}", file=sys.stderr)
+        return False
