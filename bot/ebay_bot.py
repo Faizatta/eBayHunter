@@ -111,7 +111,6 @@ async def verify_sold_active(page) -> bool:
 # ─────────────────────────────────────────────────────────────────
 # FULL FETCH — combines click + verify per country
 # ─────────────────────────────────────────────────────────────────
-
 async def fetch_sold_page(playwright, keyword: str, country_cfg: dict) -> str:
     base_url = country_cfg["url"]
     locale   = country_cfg["locale"]
@@ -120,35 +119,31 @@ async def fetch_sold_page(playwright, keyword: str, country_cfg: dict) -> str:
 
     browser = await playwright.chromium.launch(
         headless=True,
-        args=["--no-sandbox", "--disable-blink-features=AutomationControlled",
-              "--disable-dev-shm-usage"]
+        args=[
+            "--no-sandbox",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-dev-shm-usage"
+        ]
     )
+
     context = await browser.new_context(
         locale=locale,
         timezone_id=tz,
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                   "Chrome/124.0.0.0 Safari/537.36",
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
         extra_http_headers={"Accept-Language": f"{locale},en;q=0.8"},
     )
 
     try:
         page = await context.new_page()
 
-        # Click the sold items checkbox like a real user
-        clicked = await apply_sold_filter(page, base_url, keyword)
+        # ✅ Direct SOLD filter applied via URL
+        search_url = f"{base_url}/sch/i.html?_nkw={quote_plus(keyword)}&LH_BIN=1&LH_ItemCondition=1000&LH_Sold=1"
 
-        if not clicked:
-            print(f"[BOT]   SKIP {name} — could not click sold filter", file=sys.stderr)
-            return ""
+        await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
+        await asyncio.sleep(3)
 
-        # Confirm sold listings are showing
-        confirmed = await verify_sold_active(page)
+        print(f"[BOT] ✅ {name} — SOLD filter applied via URL", file=sys.stderr)
 
-        if not confirmed:
-            print(f"[BOT]   SKIP {name} — sold filter click did not apply", file=sys.stderr)
-            return ""
-
-        print(f"[BOT]   ✅ {name} — sold items confirmed, scraping...", file=sys.stderr)
         return await page.content()
 
     finally:
