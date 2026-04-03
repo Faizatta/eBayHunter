@@ -118,9 +118,7 @@
           <select v-model="sortBy"
             class="bg-zinc-800 border border-zinc-700 text-zinc-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-brand-500">
             <option value="profit">Profit ↓</option>
-            <option value="margin">Margin ↓</option>
             <option value="price">eBay Price ↑</option>
-            <option value="sold">Sales/wk ↓</option>
           </select>
 
           <button @click="exportCSV" class="btn-secondary">
@@ -137,12 +135,6 @@
       <div class="flex gap-2 flex-wrap mb-4">
         <span class="text-xs px-3 py-1.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400 font-display">
           Avg profit: <span class="text-emerald-400 font-semibold ml-1">{{ avgProfit }}</span>
-        </span>
-        <span class="text-xs px-3 py-1.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400 font-display">
-          Avg margin: <span class="text-brand-400 font-semibold ml-1">{{ avgMargin }}</span>
-        </span>
-        <span class="text-xs px-3 py-1.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400 font-display">
-          Avg sales/wk: <span class="text-brand-400 font-semibold ml-1">{{ avgSales }}</span>
         </span>
         <span class="text-xs px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-display">
           🟢 Low comp: <span class="font-semibold ml-1">{{ lowCompCount }}</span>
@@ -166,9 +158,6 @@
               <th>eBay Price</th>
               <th>AliExpress</th>
               <th>Profit</th>
-              <th>Margin</th>
-              <th>Sold/wk</th>
-              <th>Reviews</th>
               <th>Shipping</th>
               <th>Links</th>
             </tr>
@@ -217,30 +206,6 @@
                 </span>
               </td>
 
-              <!-- Margin % -->
-              <td>
-                <span class="text-sm font-mono font-semibold"
-                  :class="p.profitMarginPct >= 20 ? 'text-emerald-400' : p.profitMarginPct > 0 ? 'text-amber-400' : 'text-red-400'">
-                  {{ fmt(p.profitMarginPct, 1) }}%
-                </span>
-              </td>
-
-              <!-- Sales / week -->
-              <td>
-                <span class="text-emerald-400 font-mono text-sm font-medium">{{ p.soldPerWeek }}</span>
-                <span class="text-zinc-600 text-xs font-display">/wk</span>
-              </td>
-
-              <!-- Ali Reviews -->
-              <td>
-                <span v-if="p.aliReviews > 0"
-                  :class="p.aliReviews >= 50 ? 'text-emerald-400' : p.aliReviews >= 10 ? 'text-zinc-400' : 'text-amber-400'"
-                  class="text-sm font-mono">
-                  {{ p.aliReviews }}
-                </span>
-                <span v-else class="text-zinc-700 text-xs">—</span>
-              </td>
-
               <!-- Shipping -->
               <td>
                 <span v-if="p.freeShipping || p.aliShippingCost === 0"
@@ -258,7 +223,7 @@
               <!-- Links -->
               <td>
                 <div class="flex flex-col gap-1.5">
-                  <a :href="p.ebayItemUrl || p.ebayUrl" target="_blank" rel="noopener noreferrer"
+                  <a :href="buildEbayLink(p)" target="_blank" rel="noopener noreferrer"
                     class="text-xs bg-zinc-800 hover:bg-brand-500/20 hover:text-brand-400 border border-zinc-700 hover:border-brand-500/30 text-zinc-300 px-2.5 py-1 rounded-lg transition-all font-display text-center">
                     eBay ↗
                   </a>
@@ -275,7 +240,7 @@
 
         <div class="px-6 py-3 border-t border-zinc-800 text-xs text-zinc-500 font-display">
           Showing {{ sortedResults.length }} of {{ results.length }} products ·
-          SOLD listings only · last 30 days · each week ≥ 10 sales
+          SOLD listings only · last 30 days
         </div>
       </div>
     </div>
@@ -321,6 +286,15 @@ const auth = useAuthStore()
 // ── Constants ──────────────────────────────────────────────────────
 const PREFERRED_MIN_PROFIT = 5.0
 
+// ── eBay base URLs per country name ───────────────────────────────
+const EBAY_BASE_URLS = {
+  'UK':        'https://www.ebay.co.uk',
+  'Germany':   'https://www.ebay.de',
+  'Italy':     'https://www.ebay.it',
+  'Australia': 'https://www.ebay.com.au',
+  'USA':       'https://www.ebay.com',
+}
+
 // ── State ──────────────────────────────────────────────────────────
 const keyword        = ref('')
 const lastKeyword    = ref('')
@@ -341,6 +315,22 @@ const countries = [
 ]
 const countryFlags = Object.fromEntries(countries.map(c => [c.name, c.flag]))
 function flagFor(name) { return countryFlags[name] ?? '🌐' }
+
+// ── Build correct eBay sold-search link for the product's country ──
+function buildEbayLink(p) {
+  // If we already have a direct item URL, use it
+  const itemUrl = p.ebayItemUrl || p.ebayUrl || ''
+  if (itemUrl && itemUrl !== '#') return itemUrl
+
+  // Otherwise build a country-correct sold-search URL
+  const base = EBAY_BASE_URLS[p.country] ?? 'https://www.ebay.co.uk'
+  const q    = encodeURIComponent(p.title || '')
+  return (
+    `${base}/sch/i.html?_nkw=${q}` +
+    `&LH_Sold=1&LH_Complete=1&LH_BIN=1` +
+    `&LH_ItemCondition=1000&LH_PrefLoc=1&_sop=10`
+  )
+}
 
 // ── Helpers ────────────────────────────────────────────────────────
 function fmt(val, decimals = 2) {
@@ -373,10 +363,8 @@ function normalise(p) {
     ebaySoldPrice,
     aliexpressPrice:  aliPrice,
     aliShippingCost:  aliShip,
-    aliReviews:       parseInt(p.aliReviews ?? p.AliReviews) || 0,
     profit:           isNaN(profit) ? 0 : profit,
     profitMarginPct:  isNaN(margin) ? 0 : margin,
-    soldPerWeek:      parseInt(p.soldPerWeek ?? p.SoldPerWeek) || 0,
     freeShipping:     p.freeShipping ?? p.FreeShipping ?? false,
     competitionLevel: p.competitionLevel ?? p.CompetitionLevel ?? 'medium',
     ebayUrl:          p.ebayUrl     ?? p.EbayUrl     ?? '#',
@@ -394,16 +382,6 @@ const avgProfit = computed(() => {
   const sym = currencySymbol(r[0]?.currency)
   return (avg >= 0 ? '+' : '') + sym + avg.toFixed(2)
 })
-const avgMargin = computed(() => {
-  const r = sortedResults.value
-  if (!r.length) return '—'
-  return (r.reduce((s, p) => s + (p.profitMarginPct || 0), 0) / r.length).toFixed(1) + '%'
-})
-const avgSales = computed(() => {
-  const r = sortedResults.value
-  if (!r.length) return '—'
-  return Math.round(r.reduce((s, p) => s + p.soldPerWeek, 0) / r.length) + '/wk'
-})
 const lowCompCount  = computed(() => sortedResults.value.filter(p => p.competitionLevel === 'low').length)
 const medCompCount  = computed(() => sortedResults.value.filter(p => p.competitionLevel === 'medium').length)
 const highCompCount = computed(() => sortedResults.value.filter(p => p.competitionLevel === 'high').length)
@@ -418,9 +396,7 @@ const sortedResults = computed(() => {
   if (filterCountry.value) r = r.filter(p => p.country === filterCountry.value)
   if (filterComp.value)    r = r.filter(p => p.competitionLevel === filterComp.value)
   if (sortBy.value === 'profit') r.sort((a, b) => b.profit - a.profit)
-  if (sortBy.value === 'margin') r.sort((a, b) => (b.profitMarginPct || 0) - (a.profitMarginPct || 0))
   if (sortBy.value === 'price')  r.sort((a, b) => a.ebaySoldPrice - b.ebaySoldPrice)
-  if (sortBy.value === 'sold')   r.sort((a, b) => b.soldPerWeek - a.soldPerWeek)
   return r
 })
 
@@ -476,8 +452,7 @@ function exportCSV() {
   const headers = [
     '#', 'Title', 'Country', 'Currency',
     'eBay Price', 'AliExpress Price', 'Ali Shipping',
-    'Profit', 'Margin %', 'Sales/Week', 'Ali Reviews',
-    'Free Shipping', 'Competition',
+    'Profit', 'Free Shipping', 'Competition',
     'eBay URL', 'Ali URL',
   ]
 
@@ -496,13 +471,10 @@ function exportCSV() {
     fmt(p.aliexpressPrice),
     fmt(p.aliShippingCost),
     fmt(p.profit),
-    fmt(p.profitMarginPct, 1) + '%',
-    p.soldPerWeek,
-    p.aliReviews,
     p.freeShipping ? 'Yes' : 'No',
     p.competitionLevel,
-    p.ebayItemUrl || p.ebayUrl,
-    p.aliItemUrl  || p.aliexpressUrl,
+    buildEbayLink(p),
+    p.aliItemUrl || p.aliexpressUrl,
   ].map(escape).join(','))
 
   const csv  = [headers.join(','), ...rows].join('\n')
