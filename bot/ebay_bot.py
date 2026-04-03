@@ -1,68 +1,92 @@
 # ─────────────────────────────────────────────────────────────────
-# FORCE "Sold items" CHECKBOX — clicks it if not already checked
+# FORCE "Sold items" — targets the pill/tag eBay actually renders
 # ─────────────────────────────────────────────────────────────────
 
 async def force_sold_filter(page) -> bool:
     """
-    Clicks the 'Sold items' checkbox on eBay if it is not already
-    checked. Returns True if sold listings are confirmed active.
+    eBay renders 'Sold items' as a pill tag (not a checkbox).
+    This function checks if the pill is already active.
+    If not, it navigates directly to the URL with sold params
+    and verifies the pill appears.
     """
-    await asyncio.sleep(1.5)  # let filters render
+    await asyncio.sleep(2.0)
 
-    checked = await page.evaluate("""
+    # ── Check if "Sold items" pill is already active ──
+    already_active = await page.evaluate("""
         () => {
-            // ── Method 1: find checkbox by its label text ──
-            const labels = Array.from(document.querySelectorAll('label, span, div'));
-            for (const el of labels) {
+            const all = Array.from(document.querySelectorAll('*'));
+            for (const el of all) {
                 const txt = el.textContent.trim().toLowerCase();
-                if (txt === 'sold items') {
-                    // walk up to find the checkbox input
-                    const parent = el.closest('li, div[class*="filter"], span[class*="filter"]');
-                    if (parent) {
-                        const cb = parent.querySelector('input[type="checkbox"]');
-                        if (cb && !cb.checked) {
-                            cb.click();
-                            return 'clicked-checkbox';
-                        }
-                        if (cb && cb.checked) {
-                            return 'already-checked';
-                        }
-                    }
-                    // fallback: click the label itself
-                    el.click();
-                    return 'clicked-label';
+                // pill looks like "Sold items ×"
+                if ((txt === 'sold items' || txt.startsWith('sold items')) &&
+                    el.children.length <= 2) {
+                    return true;
                 }
             }
-
-            // ── Method 2: find by href containing LH_Sold ──
-            const link = document.querySelector('a[href*="LH_Sold=1"]');
-            if (link) { link.click(); return 'clicked-link'; }
-
-            return null;
+            return false;
         }
     """)
 
-    print(f"[BOT]   Sold filter action: {checked}", file=sys.stderr)
+    if already_active:
+        print("[BOT]   Sold items pill already active ✅", file=sys.stderr)
+        return True
 
-    if checked and checked != 'already-checked':
-        # Wait for page to reload after checkbox click
-        await page.wait_for_load_state("networkidle", timeout=15000)
-        await asyncio.sleep(1.5)
+    # ── Pill not found — rebuild URL with sold params and reload ──
+    print("[BOT]   Sold items pill missing — reloading with forced params", file=sys.stderr)
 
-    # ── Final verification: "Sold items" must appear in the HTML ──
-    html = await page.content()
-    sold_confirmed = bool(
-        re.search(r"\b(Sold|Venduto|Verkauft|Vendu)\b", html, re.IGNORECASE)
-    )
+    current_url = page.url
 
-    if not sold_confirmed:
-        print("[BOT]   REJECT — sold items not visible after filter attempt", file=sys.stderr)
+    # Inject params directly into whatever URL eBay landed on
+    import time, random
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
-    return sold_confirmed
+    parsed = urlparse(current_url)
+    params = parse_qs(parsed.query, keep_blank_values=True)
+
+    # Force all sold filter params
+    params["LH_Sold"]          = ["1"]
+    params["LH_Complete"]      = ["1"]
+    params["LH_BIN"]           = ["1"]
+    params["LH_ItemCondition"] = ["1000"]
+    params["LH_PrefLoc"]       = ["1"]
+    params["_sop"]             = ["10"]   # sort: recently sold
+    params["rt"]               = ["nc"]   # no cache
+    params["_rdc"]             = [f"{int(time.time())}_{random.randint(100,999)}"]
+
+    new_query  = urlencode(params, doseq=True)
+    forced_url = urlunparse(parsed._replace(query=new_query))
+
+    await page.goto(forced_url, wait_until="networkidle", timeout=40000)
+    await asyncio.sleep(2.0)
+
+    # ── Re-check pill is now present ──
+    confirmed = await page.evaluate("""
+        () => {
+            const all = Array.from(document.querySelectorAll('*'));
+            for (const el of all) {
+                const txt = el.textContent.trim().toLowerCase();
+                if ((txt === 'sold items' || txt.startsWith('sold items')) &&
+                    el.children.length <= 2) {
+                    return true;
+                }
+            }
+            // fallback: check for green "Sold DD Mon YYYY" text on listings
+            return document.body.innerText.match(
+                /Sold\s+\d{1,2}(st|nd|rd|th)?\s+\w+\s+\d{4}/i
+            ) !== null;
+        }
+    """)
+
+    if confirmed:
+        print("[BOT]   Sold items pill confirmed ✅", file=sys.stderr)
+    else:
+        print("[BOT]   REJECT — sold items pill still missing after reload ❌", file=sys.stderr)
+
+    return bool(confirmed)
 
 
 # ─────────────────────────────────────────────────────────────────
-# UPDATED fetch_page_with_retry — calls force_sold_filter every time
+# UPDATED fetch_page_with_retry
 # ─────────────────────────────────────────────────────────────────
 
 async def fetch_page_with_retry(playwright, url, country_cfg, max_retries=3):
@@ -75,14 +99,14 @@ async def fetch_page_with_retry(playwright, url, country_cfg, max_retries=3):
         try:
             page = await context.new_page()
 
-            # Step 1 — load the URL (sold params already in URL)
+            # Load initial URL
             await page.goto(url, wait_until="networkidle", timeout=40000)
 
-            # Step 2 — ALWAYS force the sold checkbox to be checked
+            # Force & verify "Sold items" pill is active
             sold_ok = await force_sold_filter(page)
 
             if not sold_ok:
-                print(f"[BOT]   Attempt {attempt+1}: sold filter failed, retrying...", file=sys.stderr)
+                print(f"[BOT]   Attempt {attempt+1} failed sold check, retrying...", file=sys.stderr)
                 continue
 
             html = await page.content()
@@ -91,14 +115,22 @@ async def fetch_page_with_retry(playwright, url, country_cfg, max_retries=3):
                 print(f"[BOT]   Blocked on attempt {attempt+1}", file=sys.stderr)
                 continue
 
-            return html  # ✅ sold items confirmed, return HTML
+            # Extra guard: page must contain green sold dates like "Sold 5th January 2026"
+            if not re.search(
+                r"Sold\s+\d{1,2}(?:st|nd|rd|th)?\s+\w+\s+\d{4}",
+                html, re.IGNORECASE
+            ):
+                print(f"[BOT]   No sold dates found in HTML — rejecting", file=sys.stderr)
+                continue
+
+            return html  # ✅ confirmed sold listings
 
         except PlaywrightTimeout:
             print(f"[BOT]   Timeout on attempt {attempt+1}", file=sys.stderr)
         except Exception as e:
-            print(f"[BOT]   Error on attempt {attempt+1}: {e}", file=sys.stderr)
+            print(f"[BOT]   Error: {e}", file=sys.stderr)
         finally:
             await context.close()
             await browser.close()
 
-    return ""  # all retries failed
+    return ""
