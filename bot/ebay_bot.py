@@ -1,7 +1,6 @@
 import asyncio
-import httpx
 import re
-from urllib.parse import urlencode, quote_plus
+from urllib.parse import urlencode
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
@@ -9,31 +8,35 @@ from playwright.async_api import async_playwright
 # EBAY CONFIG
 # ─────────────────────────────────────────────
 EBAY_BASE_URLS = {
-    "IT": "https://www.ebay.it",
     "DE": "https://www.ebay.de",
+    "IT": "https://www.ebay.it",
     "UK": "https://www.ebay.co.uk",
     "AU": "https://www.ebay.com.au",
 }
 
 # ─────────────────────────────────────────────
-# BUILD FILTERED EBAY URL (Sold, BIN, New)
+# BUILD CORRECT SOLD URL ✅
 # ─────────────────────────────────────────────
-def build_ebay_url(keyword: str, country_code: str = "IT") -> str:
-    base_url = EBAY_BASE_URLS.get(country_code.upper(), EBAY_BASE_URLS["IT"])
+def build_ebay_url(keyword: str, country="DE", page=1):
+    base = EBAY_BASE_URLS.get(country, EBAY_BASE_URLS["DE"])
+
     params = {
-        "_nkw": quote_plus(keyword),        # keyword
-        "_sop": "3",                        # sort by newly listed
-        "LH_BIN": "1",                      # Buy It Now
-        "LH_ItemCondition": "1000",         # New
-        "rt": "nc",                         # search type
-        "LH_Sold": "1"                      # Sold items only
+        "_nkw": keyword,          # IMPORTANT: no quote_plus
+        "_sop": "13",             # sort by recently sold
+        "_pgn": page,
+        "LH_BIN": "1",
+        "LH_ItemCondition": "1000",
+        "rt": "nc",
+        "LH_Sold": "1",           # REQUIRED
+        "LH_Complete": "1"        # REQUIRED
     }
-    return f"{base_url}/sch/i.html?{urlencode(params)}"
+
+    return f"{base}/sch/i.html?{urlencode(params)}"
 
 # ─────────────────────────────────────────────
-# EXTRACT PRICE FROM STRING
+# PRICE EXTRACTOR
 # ─────────────────────────────────────────────
-def extract_price(text: str):
+def extract_price(text):
     match = re.search(r"(\d+[.,]?\d*)", text)
     if match:
         return float(match.group(1).replace(",", "."))
@@ -42,11 +45,13 @@ def extract_price(text: str):
 # ─────────────────────────────────────────────
 # PARSE EBAY HTML
 # ─────────────────────────────────────────────
-def parse_ebay(html: str):
+def parse_ebay(html, country):
     soup = BeautifulSoup(html, "lxml")
     items = []
 
-    for li in soup.select("li.s-item"):
+    listings = soup.select("li.s-item")
+
+    for li in listings:
         title_tag = li.select_one("h3.s-item__title")
         price_tag = li.select_one(".s-item__price")
         link_tag  = li.select_one("a.s-item__link")
@@ -54,99 +59,97 @@ def parse_ebay(html: str):
         if not title_tag or not price_tag:
             continue
 
+        title = title_tag.get_text(strip=True)
+
+        # Skip ads / unwanted
+        if "Shop on eBay" in title or "Explore" in title:
+            continue
+
         price = extract_price(price_tag.get_text())
         if not price:
             continue
 
+        link = link_tag["href"] if link_tag else ""
+
         items.append({
-            "title": title_tag.get_text(strip=True),
-            "ebay_price": price,
-            "link": link_tag["href"] if link_tag else ""
+            "country": country,
+            "title": title,
+            "price": price,
+            "link": link
         })
+
     return items
 
 # ─────────────────────────────────────────────
-# FETCH ALIEXPRESS PRICE (CHEAPEST)
+# FETCH PAGE
 # ─────────────────────────────────────────────
-async def fetch_aliexpress_price(keyword: str):
-    url = f"https://www.aliexpress.com/wholesale?SearchText={quote_plus(keyword)}"
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.get(url)
-        html = r.text
+async def fetch_page(page, url):
+    await page.goto(url, wait_until="domcontentloaded")
+    await asyncio.sleep(2)
 
-    soup = BeautifulSoup(html, "lxml")
-    prices = []
-    for p in soup.select(".manhattan--price-sale--1CCSZfK"):
-        val = extract_price(p.get_text())
-        if val:
-            prices.append(val)
+    # Scroll for lazy loading
+    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    await asyncio.sleep(2)
 
-    return min(prices) if prices else None
+    return await page.content()
 
 # ─────────────────────────────────────────────
-# CALCULATE PROFIT & MARGIN
+# SCRAPE ONE COUNTRY
 # ─────────────────────────────────────────────
-def calculate_profit(ebay_price, ali_price):
-    if not ali_price:
-        return None, None
-    profit = ebay_price - ali_price
-    margin = (profit / ali_price) * 100
-    return round(profit, 2), round(margin, 2)
+async def scrape_country(pw, keyword, country, pages=2):
+    browser = await pw.chromium.launch(headless=True)
+    context = await browser.new_context()
+    page = await context.new_page()
+
+    all_items = []
+
+    for p in range(1, pages + 1):
+        url = build_ebay_url(keyword, country, p)
+        print(f"[BOT] {country} Page {p}: {url}")
+
+        html = await fetch_page(page, url)
+        items = parse_ebay(html, country)
+
+        print(f"[BOT] {country} Page {p} → {len(items)} items")
+
+        all_items.extend(items)
+
+    await browser.close()
+    return all_items
 
 # ─────────────────────────────────────────────
-# FETCH EBAY PAGE USING PLAYWRIGHT
-# ─────────────────────────────────────────────
-async def fetch_ebay_page(keyword, country_code="IT"):
-    url = build_ebay_url(keyword, country_code)
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=False)
-        page = await browser.new_page()
-        await page.goto(url, wait_until="domcontentloaded")
-        await asyncio.sleep(2)
-        # scroll to load lazy items
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        await asyncio.sleep(2)
-        html = await page.content()
-        await browser.close()
-    return html
-
-# ─────────────────────────────────────────────
-# MAIN BOT
+# MAIN RUNNER
 # ─────────────────────────────────────────────
 async def run_bot(keyword):
-    html = await fetch_ebay_page(keyword)
-    ebay_items = parse_ebay(html)
-    print(f"[BOT] Found {len(ebay_items)} eBay items")
+    async with async_playwright() as pw:
+        tasks = []
 
-    results = []
-    for item in ebay_items[:10]:  # limit first 10 items
-        ali_price = await fetch_aliexpress_price(item["title"])
-        profit, margin = calculate_profit(item["ebay_price"], ali_price)
-        results.append({
-            "title": item["title"],
-            "ebay_price": item["ebay_price"],
-            "ali_price": ali_price,
-            "profit": profit,
-            "margin": margin,
-            "link": item["link"]
-        })
-    return results
+        for country in EBAY_BASE_URLS.keys():
+            tasks.append(scrape_country(pw, keyword, country, pages=2))
+
+        results = await asyncio.gather(*tasks)
+
+    # Flatten list
+    final_results = [item for sublist in results for item in sublist]
+    return final_results
 
 # ─────────────────────────────────────────────
 # RUN
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
     keyword = "gym Mini"
+
     results = asyncio.run(run_bot(keyword))
 
-    print("\n===== RESULTS =====\n")
-    for r in results:
+    print("\n===== FINAL RESULTS =====\n")
+
+    for r in results[:20]:
         print(f"""
+Country: {r['country']}
 Title: {r['title']}
-eBay: {r['ebay_price']}
-AliExpress: {r['ali_price']}
-Profit: {r['profit']}
-Margin: {r['margin']}%
+Price: {r['price']}
 Link: {r['link']}
 --------------------------
 """)
+
+    print(f"\nTOTAL ITEMS: {len(results)}")
