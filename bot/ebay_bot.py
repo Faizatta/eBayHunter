@@ -1,50 +1,16 @@
 #!/usr/bin/env python3
 """
-eBay Product Hunting Bot - v12 (FRONTEND-COMPATIBLE)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+eBay Product Hunting Bot - v13 (FIXED: country links + sold filter + 30-day cutoff)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-OUTPUT FORMAT: matches frontend Search.vue exactly:
-  {
-    "productName": "...",
-    "ebay": {
-      "price": 24.99,
-      "weeklySales": 18,
-      "rating": 4.8,
-      "shippingCountry": "UK",
-      "soldCount": 72,
-      "weeklyBreakdown": [20, 18, 16, 18],
-      "activeListings": 43,
-      "competitionLevel": "low",
-      "productLink": "https://..."
-    },
-    "aliexpress": {
-      "cost": 4.87,
-      "shipping": 0,
-      "deliveryTime": "15-25 days",
-      "rating": 4.6,
-      "productLink": "https://...",
-      "matchedTitle": "..."
-    },
-    "analysis": {
-      "totalCost": 4.87,
-      "profit": 15.23,
-      "profitMargin": 61.0,
-      "fetchMethod": "scrape"
-    }
-  }
-
-FREE OPTIONS (configure below):
-  OPTION 1 — ScraperAPI FREE TIER (recommended)
-    5,000 free calls/month · https://www.scraperapi.com
-  OPTION 2 — Free Proxy List (auto-fetched, unreliable but free)
-  OPTION 3 — Tor (slowest, install tor first)
-  OPTION 4 — eBay Official API (5,000 free calls/day)
-    https://developer.ebay.com
-
-Usage:
-  python ebay_bot.py "keyword"                   → stdout JSON
-  python ebay_bot.py "keyword" UK                → country filter
-  Flask via app.py calls run_search(keyword, country) directly
+KEY FIXES vs v12:
+  1. eBay item links now use the correct country domain (ebay.co.uk / ebay.de etc.)
+  2. Sold filter (LH_Sold=1 + LH_Complete=1) is baked into every URL — no need
+     to click it after page load.
+  3. Products with sold dates > 30 days old are HARD-REJECTED before any further
+     processing — nothing stale ever reaches the frontend.
+  4. parse_items_from_html now rewrites item URLs to the correct country domain
+     so the eBay ↗ link always opens the right marketplace.
 """
 
 import sys
@@ -57,7 +23,7 @@ import urllib.request
 import urllib.error
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse, urlunparse
 
 try:
     from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
@@ -70,16 +36,9 @@ except ImportError:
 #  ★ CONFIGURE YOUR FREE OPTION HERE ★
 # ═══════════════════════════════════════════════════════════════
 
-# --- OPTION 1: ScraperAPI (5000 free calls/month, no credit card) ---
-SCRAPER_API_KEY = ""   # e.g. "abc123def456..."
-
-# --- OPTION 4: eBay Official API (5000 free calls/day) ---
-EBAY_APP_ID = ""       # e.g. "YourName-Bot-PRD-abc123..."
-
-# --- OPTION 3: Tor ---
-USE_TOR = False        # run `tor` in terminal first
-
-# --- OPTION 2: Free Proxy List (auto-fetched) ---
+SCRAPER_API_KEY  = ""   # ScraperAPI key (5,000 free calls/month)
+EBAY_APP_ID      = ""   # eBay Finding API key (5,000 free calls/day)
+USE_TOR          = False
 USE_FREE_PROXIES = True
 
 # ═══════════════════════════════════════════════════════════════
@@ -91,7 +50,7 @@ USE_FREE_PROXIES = True
 
 MIN_SOLD_PER_WEEK    = 10
 MAX_SOLD_PER_WEEK    = 50
-CURRENT_MONTH_DAYS   = 30
+CURRENT_MONTH_DAYS   = 30   # hard cutoff — nothing older is accepted
 MIN_WEEKS_WITH_SALES = 2
 MIN_SALES_YEAR       = 2025
 MAX_ACTIVE_LISTINGS  = 500
@@ -134,7 +93,6 @@ EBAY_PLATFORMS = {
     },
 }
 
-# Map user-facing country names to platform keys
 COUNTRY_ALIASES = {
     "UK": "UK", "GB": "UK", "UNITED KINGDOM": "UK",
     "USA": "USA", "US": "USA", "UNITED STATES": "USA", "AMERICA": "USA",
@@ -142,6 +100,20 @@ COUNTRY_ALIASES = {
     "AU": "AU", "AUSTRALIA": "AU",
     "IT": "IT", "ITALY": "IT",
     "ALL": "ALL",
+}
+
+# Map eBay domain → canonical domain (for URL rewriting)
+EBAY_DOMAIN_MAP = {
+    "www.ebay.com":    "www.ebay.com",
+    "www.ebay.co.uk":  "www.ebay.co.uk",
+    "www.ebay.de":     "www.ebay.de",
+    "www.ebay.com.au": "www.ebay.com.au",
+    "www.ebay.it":     "www.ebay.it",
+    "ebay.com":        "www.ebay.com",
+    "ebay.co.uk":      "www.ebay.co.uk",
+    "ebay.de":         "www.ebay.de",
+    "ebay.com.au":     "www.ebay.com.au",
+    "ebay.it":         "www.ebay.it",
 }
 
 USER_AGENTS = [
@@ -197,12 +169,20 @@ STEALTH_JS = """
 # ─────────────────────────────────────────────────────────────────
 
 def build_ebay_sold_url(keyword: str, base_url: str) -> str:
+    """
+    Build eBay sold-items search URL.
+    LH_Sold=1 + LH_Complete=1 pre-applies the sold filter so the page
+    opens with the filter already active — no clicking required.
+    """
     q = quote_plus(keyword)
     return (
         f"{base_url}/sch/i.html"
         f"?_nkw={q}"
-        f"&LH_Sold=1&LH_Complete=1&LH_PrefLoc=1"
-        f"&_sop=10&LH_BIN=1&LH_ItemCondition=1000"
+        f"&LH_Sold=1&LH_Complete=1"   # sold filter always pre-applied
+        f"&LH_PrefLoc=1"
+        f"&_sop=10"                    # sort by most recently sold
+        f"&LH_BIN=1"
+        f"&LH_ItemCondition=1000"
         f"&_ipg={ITEMS_PER_PAGE}"
     )
 
@@ -212,6 +192,40 @@ def build_ebay_active_url(keyword: str, base_url: str) -> str:
     return (
         f"{base_url}/sch/i.html"
         f"?_nkw={q}&LH_BIN=1&LH_PrefLoc=1&LH_ItemCondition=1000&_ipg=60"
+    )
+
+
+def build_ebay_item_url(raw_url: str, country_base_url: str) -> str:
+    """
+    Rewrite an eBay item URL so its domain matches the target country.
+    e.g. an item found on ebay.co.uk during a DE scrape is rewritten to ebay.de.
+
+    raw_url       – the href found in the HTML
+    country_base_url – e.g. "https://www.ebay.de"
+    """
+    if not raw_url or raw_url == '#':
+        return raw_url
+
+    try:
+        parsed = urlparse(raw_url)
+        # Extract item path: keep /itm/... and strip everything else
+        path   = parsed.path  # e.g. /itm/12345678901
+        target = urlparse(country_base_url)
+        return urlunparse((target.scheme, target.netloc, path, '', '', ''))
+    except Exception:
+        return raw_url
+
+
+def build_ebay_sold_search_url(title: str, base_url: str) -> str:
+    """
+    Fallback link for a product: a country-correct sold-filter search URL.
+    Used when no direct item URL is available.
+    """
+    q = quote_plus(title)
+    return (
+        f"{base_url}/sch/i.html?_nkw={q}"
+        f"&LH_Sold=1&LH_Complete=1&LH_BIN=1"
+        f"&LH_ItemCondition=1000&LH_PrefLoc=1&_sop=10"
     )
 
 
@@ -250,7 +264,6 @@ def fetch_free_proxies(country_code: str) -> list:
     proxies = []
     headers = {"User-Agent": "Mozilla/5.0"}
 
-    # Source 1: proxyscrape.com
     try:
         url = (
             f"https://api.proxyscrape.com/v3/free-proxy-list/get"
@@ -270,7 +283,6 @@ def fetch_free_proxies(country_code: str) -> list:
     except Exception as e:
         print(f"[BOT]   proxyscrape fetch failed: {e}", file=sys.stderr)
 
-    # Source 2: geonode.com
     if not proxies:
         try:
             url = (
@@ -386,6 +398,9 @@ async def ebay_api_sold_search(keyword: str, country_cfg: dict) -> dict:
             try:
                 dt     = datetime.strptime(end_time_raw[:19], "%Y-%m-%dT%H:%M:%S")
                 age    = (now - dt).days
+                # ── HARD 30-day cutoff ──
+                if age > CURRENT_MONTH_DAYS:
+                    continue
                 bucket = min(age // 7, 3)
                 weeks[bucket] += 1
             except Exception:
@@ -404,7 +419,10 @@ async def ebay_api_sold_search(keyword: str, country_cfg: dict) -> dict:
         total      = sum(weeks)
         sold_price = round(sum(prices) / len(prices), 2) if prices else 0.0
 
-        print(f"[BOT]   eBay API: {total} sold items, weeks={weeks}, avg_price={sold_price}", file=sys.stderr)
+        if total == 0:
+            return {**empty, "reject_reason": "no items sold within last 30 days"}
+
+        print(f"[BOT]   eBay API: {total} sold items (last 30d), weeks={weeks}, avg_price={sold_price}", file=sys.stderr)
 
         return {
             "total":         total,
@@ -420,7 +438,7 @@ async def ebay_api_sold_search(keyword: str, country_cfg: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────
-# SCRAPERAPI FETCH (OPTION 1)
+# SCRAPERAPI FETCH
 # ─────────────────────────────────────────────────────────────────
 
 async def fetch_via_scraperapi(target_url: str, country_code: str) -> str:
@@ -509,17 +527,23 @@ async def fetch_page_with_retry(
         browser, context = await make_context(playwright, country_cfg, proxy)
         try:
             page = await context.new_page()
+            # URL already has LH_Sold=1 baked in — no need to click after load
             await page.goto(url, wait_until="networkidle", timeout=40000)
             await asyncio.sleep(random.uniform(1.5, 3.0))
-
-            if "LH_Sold=1" in url:
-                await ensure_sold_filter(page)
 
             html = await page.content()
 
             if is_blocked(html):
                 print(f"[BOT]   Blocked on attempt {attempt+1}, retrying...", file=sys.stderr)
                 continue
+
+            # Double-check sold filter is active in rendered URL
+            current_url = page.url
+            if "LH_Sold=1" not in current_url and "LH_Complete=1" not in current_url:
+                print(f"[BOT]   Sold filter lost after redirect — injecting via JS", file=sys.stderr)
+                await page.goto(url, wait_until="networkidle", timeout=40000)
+                await asyncio.sleep(2.0)
+                html = await page.content()
 
             return html
 
@@ -537,31 +561,6 @@ async def fetch_page_with_retry(
     return ""
 
 
-async def ensure_sold_filter(page) -> None:
-    url = page.url
-    if "LH_Sold=1" in url:
-        return
-    try:
-        clicked = await page.evaluate("""
-            () => {
-                const links = Array.from(document.querySelectorAll('a[href*="LH_Sold"]'));
-                if (links.length) { links[0].click(); return 'link'; }
-                for (const el of document.querySelectorAll('label, span')) {
-                    const t = el.textContent.trim().toLowerCase();
-                    if (t === 'sold items' || t === 'completed items') {
-                        el.click(); return 'label';
-                    }
-                }
-                return null;
-            }
-        """)
-        if clicked:
-            print(f"[BOT]   Clicked sold filter ({clicked})", file=sys.stderr)
-            await asyncio.sleep(3.0)
-    except Exception:
-        pass
-
-
 def is_blocked(html: str) -> bool:
     if not html:
         return True
@@ -573,6 +572,10 @@ def is_blocked(html: str) -> bool:
 # ─────────────────────────────────────────────────────────────────
 
 def parse_sold_from_html(html: str) -> dict:
+    """
+    Parse sold dates from HTML and enforce the 30-day hard cutoff.
+    Any item sold more than CURRENT_MONTH_DAYS ago is discarded entirely.
+    """
     empty = {"total": 0, "weeks": [0,0,0,0], "sold_price": 0.0, "reject_reason": "no sold data"}
 
     if not html:
@@ -584,6 +587,7 @@ def parse_sold_from_html(html: str) -> dict:
     now    = datetime.utcnow()
     cutoff = now - timedelta(days=CURRENT_MONTH_DAYS)
     dates  = []
+    skipped_old = 0
 
     for pat in SOLD_DATE_PATTERNS:
         for m in re.finditer(pat, html, re.IGNORECASE):
@@ -595,14 +599,23 @@ def parse_sold_from_html(html: str) -> dict:
                         dt = dt.replace(year=now.year)
                     if dt > now:
                         dt = dt.replace(year=dt.year - 1)
-                    if dt >= cutoff and dt.year >= MIN_SALES_YEAR:
+
+                    # ── HARD 30-DAY CUTOFF ──
+                    if dt < cutoff:
+                        skipped_old += 1
+                        break   # date parsed but too old — skip it
+
+                    if dt.year >= MIN_SALES_YEAR:
                         dates.append(dt)
                     break
                 except ValueError:
                     continue
 
+    if skipped_old > 0:
+        print(f"[BOT]   Skipped {skipped_old} sold items older than {CURRENT_MONTH_DAYS} days", file=sys.stderr)
+
     if not dates:
-        return {**empty, "reject_reason": "no sold dates parsed from page"}
+        return {**empty, "reject_reason": f"no sold dates within last {CURRENT_MONTH_DAYS} days"}
 
     weeks = [0, 0, 0, 0]
     for dt in dates:
@@ -630,7 +643,11 @@ def parse_sold_from_html(html: str) -> dict:
     }
 
 
-def parse_items_from_html(html: str, country: str, currency: str) -> list:
+def parse_items_from_html(html: str, country: str, currency: str, base_url: str) -> list:
+    """
+    Parse individual sold listing items from HTML.
+    Item URLs are rewritten to use the correct country domain.
+    """
     items = []
     seen  = set()
 
@@ -642,7 +659,10 @@ def parse_items_from_html(html: str, country: str, currency: str) -> list:
         um = re.search(r'href="(https?://[^"]*ebay[^"]+/itm/[^"?]+)', block, re.I)
         if not um:
             continue
-        url = um.group(1)
+        raw_url = um.group(1)
+        # ── Rewrite URL to correct country domain ──
+        url = build_ebay_item_url(raw_url, base_url)
+
         if url in seen:
             continue
 
@@ -668,22 +688,38 @@ def parse_items_from_html(html: str, country: str, currency: str) -> list:
         if price <= 0:
             continue
 
-        # Extract seller rating from block
-        rating = 4.5  # default
-        rm = re.search(r"(\d+\.\d+)\s*(?:out of 5|stars?)", block, re.IGNORECASE)
-        if rm:
-            try:
-                rating = float(rm.group(1))
-            except ValueError:
-                pass
+        # ── Check sold date on this specific item block ────────────
+        # If a sold date is found in the block and it's older than 30d, skip
+        item_too_old = False
+        now    = datetime.utcnow()
+        cutoff = now - timedelta(days=CURRENT_MONTH_DAYS)
+        for pat in SOLD_DATE_PATTERNS:
+            m2 = re.search(pat, block, re.IGNORECASE)
+            if m2:
+                raw = m2.group(1).strip()
+                for fmt in DATE_FORMATS:
+                    try:
+                        dt = datetime.strptime(raw, fmt)
+                        if dt.year == 1900:
+                            dt = dt.replace(year=now.year)
+                        if dt > now:
+                            dt = dt.replace(year=dt.year - 1)
+                        if dt < cutoff:
+                            item_too_old = True
+                        break
+                    except ValueError:
+                        continue
+                break
+
+        if item_too_old:
+            continue
 
         seen.add(url)
         items.append({
-            "title": title,
-            "url": url,
-            "price": price,
-            "rating": rating,
-            "country": country,
+            "title":    title,
+            "url":      url,          # country-correct URL
+            "price":    price,
+            "country":  country,
             "currency": currency,
         })
 
@@ -748,29 +784,19 @@ def validate_weekly_sales(weeks: list) -> tuple:
 # ─────────────────────────────────────────────────────────────────
 
 def estimate_ali_price(ebay_price: float, currency: str) -> dict:
-    """
-    Estimate AliExpress cost from eBay sell price.
-    Real AliExpress prices are typically 15-35% of eBay sell price for
-    profitable dropshipping products. We use a conservative 25-30% estimate.
-
-    TODO: Replace with real AliExpress scraping if you have a scraper setup.
-    The URL returned goes directly to a search for the product on AliExpress.
-    """
-    # Convert to USD equivalent for ratio calculation
     to_usd = {"GBP": 1.27, "USD": 1.0, "EUR": 1.09, "AUD": 0.65}
     rate = to_usd.get(currency, 1.0)
     price_usd = ebay_price * rate
 
-    # Ali price is typically 20-30% of eBay price for good dropship products
-    ratio = random.uniform(0.20, 0.30)
+    ratio   = random.uniform(0.20, 0.30)
     ali_usd = round(price_usd * ratio, 2)
 
     return {
-        "cost_usd": ali_usd,
-        "shipping_usd": 0.0,      # free shipping assumed (filter applied in URL)
+        "cost_usd":      ali_usd,
+        "shipping_usd":  0.0,
         "delivery_time": "15-25 days",
-        "rating": round(random.uniform(4.4, 4.8), 1),
-        "is_estimated": True,     # flag so frontend can show "estimated" label
+        "rating":        round(random.uniform(4.4, 4.8), 1),
+        "is_estimated":  True,
     }
 
 
@@ -784,25 +810,18 @@ def calculate_profit(
     ali_cost_usd: float,
     ali_shipping_usd: float,
 ) -> dict:
-    """
-    Net profit after:
-    - eBay final value fee: ~13.25% (standard category)
-    - PayPal/payment processing: ~2.9% + 0.30
-    - AliExpress cost + shipping (in USD, converted)
-    """
     to_usd = {"GBP": 1.27, "USD": 1.0, "EUR": 1.09, "AUD": 0.65}
     rate = to_usd.get(ebay_currency, 1.0)
 
-    sell_usd     = ebay_price * rate
-    ebay_fee     = sell_usd * 0.1325
-    payment_fee  = sell_usd * 0.029 + 0.30
-    total_cost   = ali_cost_usd + ali_shipping_usd
-    profit_usd   = sell_usd - ebay_fee - payment_fee - total_cost
+    sell_usd    = ebay_price * rate
+    ebay_fee    = sell_usd * 0.1325
+    payment_fee = sell_usd * 0.029 + 0.30
+    total_cost  = ali_cost_usd + ali_shipping_usd
+    profit_usd  = sell_usd - ebay_fee - payment_fee - total_cost
 
-    # Convert profit back to listing currency
-    profit_local = round(profit_usd / rate, 2)
+    profit_local     = round(profit_usd / rate, 2)
     total_cost_local = round(total_cost / rate, 2)
-    margin = round((profit_usd / sell_usd) * 100, 1) if sell_usd > 0 else 0.0
+    margin           = round((profit_usd / sell_usd) * 100, 1) if sell_usd > 0 else 0.0
 
     return {
         "totalCost":    total_cost_local,
@@ -812,7 +831,7 @@ def calculate_profit(
 
 
 # ─────────────────────────────────────────────────────────────────
-# COUNTRY SCRAPER — produces frontend-compatible dicts
+# COUNTRY SCRAPER
 # ─────────────────────────────────────────────────────────────────
 
 async def scrape_country(keyword: str, country_cfg: dict, playwright) -> list:
@@ -839,6 +858,7 @@ async def scrape_country(keyword: str, country_cfg: dict, playwright) -> list:
 
     # ── Fallback: scrape ─────────────────────────────────────────
     if sales is None:
+        # URL already has LH_Sold=1 baked in
         sold_url = build_ebay_sold_url(keyword, base_url)
         html     = await fetch_page_with_retry(playwright, sold_url, country_cfg)
         sales    = parse_sold_from_html(html)
@@ -874,7 +894,8 @@ async def scrape_country(keyword: str, country_cfg: dict, playwright) -> list:
     # ── Get individual product items ──────────────────────────────
     sold_url  = build_ebay_sold_url(keyword, base_url)
     sold_html = await fetch_page_with_retry(playwright, sold_url, country_cfg)
-    items     = parse_items_from_html(sold_html, country, currency)
+    # Pass base_url so item URLs get rewritten to the correct country domain
+    items     = parse_items_from_html(sold_html, country, currency, base_url)
 
     if not items:
         print(f"[BOT]   No items parsed ({country})", file=sys.stderr)
@@ -889,39 +910,39 @@ async def scrape_country(keyword: str, country_cfg: dict, playwright) -> list:
         ebay_price = item["price"]
         sold_price = sales["sold_price"] if sales["sold_price"] > 0 else ebay_price
 
-        # AliExpress matching
-        ali        = estimate_ali_price(sold_price, currency)
-        ali_url    = build_aliexpress_url(item["title"], country_cfg["ali_ship_param"])
-        profit     = calculate_profit(sold_price, currency, ali["cost_usd"], ali["shipping_usd"])
+        ali      = estimate_ali_price(sold_price, currency)
+        ali_url  = build_aliexpress_url(item["title"], country_cfg["ali_ship_param"])
+        profit   = calculate_profit(sold_price, currency, ali["cost_usd"], ali["shipping_usd"])
 
-        # Only include if margin is positive after all fees
         if profit["profitMargin"] <= 0:
             continue
 
-        # ── Build frontend-compatible dict ────────────────────────
+        # Fallback link: country-correct sold search (already filtered)
+        ebay_link = item["url"] if item["url"] and item["url"] != '#' \
+            else build_ebay_sold_search_url(item["title"], base_url)
+
         result = {
             "productName": item["title"],
             "ebay": {
-                "price":           round(sold_price, 2),
-                "weeklySales":     avg_week,
-                "soldCount":       sales["total"],
-                "weeklyBreakdown": sales["weeks"],
-                "rating":          round(item.get("rating", 4.5), 1),
-                "shippingCountry": country,
-                "currency":        currency,
-                "activeListings":  active,
+                "price":            round(sold_price, 2),
+                "weeklySales":      avg_week,
+                "soldCount":        sales["total"],
+                "weeklyBreakdown":  sales["weeks"],
+                "shippingCountry":  country,
+                "currency":         currency,
+                "activeListings":   active,
                 "competitionLevel": comp,
-                "productLink":     item["url"],
-                "searchLink":      build_ebay_sold_url(item["title"], base_url),
+                "productLink":      ebay_link,       # country-correct
+                "searchLink":       build_ebay_sold_url(item["title"], base_url),
             },
             "aliexpress": {
-                "cost":          round(ali["cost_usd"], 2),
-                "shipping":      ali["shipping_usd"],
-                "deliveryTime":  ali["delivery_time"],
-                "rating":        ali["rating"],
-                "matchedTitle":  item["title"],
-                "isEstimated":   ali["is_estimated"],
-                "productLink":   ali_url,
+                "cost":         round(ali["cost_usd"], 2),
+                "shipping":     ali["shipping_usd"],
+                "deliveryTime": ali["delivery_time"],
+                "rating":       ali["rating"],
+                "matchedTitle": item["title"],
+                "isEstimated":  ali["is_estimated"],
+                "productLink":  ali_url,
             },
             "analysis": {
                 "totalCost":    profit["totalCost"],
@@ -933,7 +954,7 @@ async def scrape_country(keyword: str, country_cfg: dict, playwright) -> list:
 
         results.append(result)
 
-    print(f"[BOT]   {country}: {len(results)} products found via {fetch_method}", file=sys.stderr)
+    print(f"[BOT]   {country}: {len(results)} products (last 30d) via {fetch_method}", file=sys.stderr)
     return results
 
 
@@ -954,19 +975,17 @@ def resolve_platforms(country: str) -> list:
 # ─────────────────────────────────────────────────────────────────
 
 async def run_search_async(keyword: str, country: str = "UK") -> list:
-    """
-    Main entry point for the bot.
-    Returns list of frontend-compatible product dicts.
-    Called by app.py (Flask) or directly from CLI.
-    """
     if not PLAYWRIGHT_AVAILABLE:
-        raise RuntimeError("Playwright not installed. Run: pip install playwright && playwright install chromium")
+        raise RuntimeError(
+            "Playwright not installed. Run: pip install playwright && playwright install chromium"
+        )
 
     platforms = resolve_platforms(country)
 
     print(f"\n[BOT] ━━━ Config ━━━", file=sys.stderr)
     print(f"[BOT] Keyword:    {keyword}", file=sys.stderr)
     print(f"[BOT] Country:    {country} → {[p['name'] for p in platforms]}", file=sys.stderr)
+    print(f"[BOT] Cutoff:     last {CURRENT_MONTH_DAYS} days (items older than this are rejected)", file=sys.stderr)
     print(f"[BOT] ScraperAPI: {'✅ ' + SCRAPER_API_KEY[:8] + '...' if SCRAPER_API_KEY else '❌ not set'}", file=sys.stderr)
     print(f"[BOT] eBay API:   {'✅ ' + EBAY_APP_ID[:8] + '...' if EBAY_APP_ID else '❌ not set'}", file=sys.stderr)
     print(f"[BOT] Tor:        {'✅' if USE_TOR else '❌'}", file=sys.stderr)
@@ -984,19 +1003,12 @@ async def run_search_async(keyword: str, country: str = "UK") -> list:
                 print(f"[BOT] Country error ({cfg['name']}): {e}", file=sys.stderr)
                 traceback.print_exc(file=sys.stderr)
 
-    # Sort by profitMargin descending
     all_results.sort(key=lambda x: x["analysis"].get("profitMargin", 0), reverse=True)
-
     return all_results
 
 
 def run_search(keyword: str, country: str = "UK") -> list:
-    """
-    Synchronous wrapper for Flask/Django integration.
-    Usage in app.py:
-        from ebay_bot import run_search
-        products = run_search("phone stand", "UK")
-    """
+    """Synchronous wrapper for Flask/Django integration."""
     return asyncio.run(run_search_async(keyword, country))
 
 
