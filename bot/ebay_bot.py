@@ -108,44 +108,13 @@ async def verify_sold_active(page) -> bool:
     return pill or dates
 
 
-# ─────────────────────────────────────────────────────────────────
-# FULL FETCH — combines click + verify per country
-# ─────────────────────────────────────────────────────────────────
-async def fetch_sold_page(playwright, keyword: str, country_cfg: dict) -> str:
-    base_url = country_cfg["url"]
-    locale   = country_cfg["locale"]
-    tz       = country_cfg["timezone"]
-    name     = country_cfg["name"]
-
-    browser = await playwright.chromium.launch(
-        headless=True,
-        args=[
-            "--no-sandbox",
-            "--disable-blink-features=AutomationControlled",
-            "--disable-dev-shm-usage"
-        ]
-    )
-
-    context = await browser.new_context(
-        locale=locale,
-        timezone_id=tz,
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
-        extra_http_headers={"Accept-Language": f"{locale},en;q=0.8"},
-    )
-
-    try:
-        page = await context.new_page()
-
-        # ✅ Direct SOLD filter applied via URL
-        search_url = f"{base_url}/sch/i.html?_nkw={quote_plus(keyword)}&LH_BIN=1&LH_ItemCondition=1000&LH_Sold=1"
-
-        await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
-        await asyncio.sleep(3)
-
-        print(f"[BOT] ✅ {name} — SOLD filter applied via URL", file=sys.stderr)
-
-        return await page.content()
-
-    finally:
-        await context.close()
-        await browser.close()
+search_url = (
+    f"{base_url}/sch/i.html"
+    f"?_nkw={quote_plus(keyword)}"
+    f"&LH_Sold=1"
+    f"&LH_Complete=1"
+    f"&LH_BIN=1"
+    f"&LH_ItemCondition=1000"
+    f"&_ipg=240"
+    f"&_sop=13"
+)
